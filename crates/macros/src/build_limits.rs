@@ -1,8 +1,7 @@
-use crate::*;
-use rayon::iter::ParallelIterator;
+use super::*;
+use gen::{NamespaceTypes, TypeLimit, TypeLimits, TypeTree};
 use std::convert::{TryFrom, TryInto};
 use syn::spanned::Spanned;
-use windows_gen::{NamespaceTypes, TypeLimit, TypeLimits, TypeTree};
 
 pub struct BuildLimits(pub std::collections::BTreeSet<TypesDeclaration>);
 
@@ -51,7 +50,7 @@ impl BuildLimits {
             tree.reexport();
         }
 
-        let ts = tree.gen().reduce(squote::TokenStream::new, |mut accum, n| {
+        let ts = tree.gen().fold(squote::TokenStream::new(), |mut accum, n| {
             accum.combine(&n);
             accum
         });
@@ -107,6 +106,10 @@ impl syn::parse::Parse for BuildLimits {
             let limit: TypesDeclaration = use_tree.try_into()?;
 
             limits.insert(limit);
+
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+            }
         }
         Ok(Self(limits))
     }

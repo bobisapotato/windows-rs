@@ -1,5 +1,4 @@
 use crate::*;
-use rayon::prelude::*;
 use squote::TokenStream;
 
 /// A namespaced tree of types
@@ -113,9 +112,9 @@ impl TypeTree {
     }
 
     /// Turn the tree into a token stream for code generation
-    pub fn gen<'a>(&'a self) -> impl ParallelIterator<Item = TokenStream> + 'a {
+    pub fn gen<'a>(&'a self) -> impl Iterator<Item = TokenStream> + 'a {
         self.types
-            .par_iter()
+            .iter()
             .map(|t| t.gen())
             .chain(self.namespaces.gen())
     }
@@ -123,7 +122,7 @@ impl TypeTree {
 
 #[cfg(test)]
 mod tests {
-    use crate::{NamespaceTypes, TypeLimit, TypeLimits, TypeTree};
+    use crate::*;
 
     #[test]
     fn test_dependency_inclusion() {

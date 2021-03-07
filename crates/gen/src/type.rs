@@ -39,12 +39,16 @@ pub enum TypeKind {
     IUnknown,
     ErrorCode,
     Bool32,
+    Matrix3x2,
     Class(TypeName),
     Interface(TypeName),
     Enum(TypeName),
     Struct(TypeName),
     Delegate(TypeName),
     Generic(&'static str),
+    /// A type that hasn't been supported yet.
+    /// For example, multidimensional arrays are not yet supported
+    NotYetSupported,
 }
 
 impl Type {
@@ -94,7 +98,7 @@ impl Type {
 
                 if def.name().0.is_empty() {
                     // TODO: handle nested types
-                    TypeKind::Bool
+                    TypeKind::NotYetSupported
                 } else {
                     TypeKind::from_type_def_or_ref(&def, generics, calling_namespace)
                 }
@@ -106,7 +110,7 @@ impl Type {
                 // rank (dimensions)
                 // bounds count
                 // bound
-                TypeKind::Bool
+                TypeKind::NotYetSupported
             }
             0x15 => TypeKind::from_type_name(TypeName::from_type_spec_blob(
                 blob,
@@ -124,6 +128,11 @@ impl Type {
 
         let mut name = if let Some(param) = param {
             is_input = !param.flags().output();
+
+            // TODO: workaround for https://github.com/microsoft/win32metadata/issues/63
+            if is_input && param.has_attribute(("Windows.Win32.Interop", "ComOutPtrAttribute")) {
+                is_input = false;
+            }
 
             if !is_const {
                 is_const = param.has_attribute(("Windows.Win32.Interop", "ConstAttribute"));
@@ -324,6 +333,10 @@ impl TypeKind {
             ("Windows.Foundation", "HResult") => Self::ErrorCode,
             ("Windows.Win32.Com", "HRESULT") => Self::ErrorCode,
             ("Windows.Win32.SystemServices", "BOOL") => Self::Bool32,
+            // TODO: workaround for https://github.com/microsoft/win32metadata/issues/181
+            ("Windows.Win32.SystemServices", "LARGE_INTEGER") => Self::I64,
+            ("Windows.Win32.SystemServices", "ULARGE_INTEGER") => Self::U64,
+            ("Windows.Win32.Direct2D", "D2D_MATRIX_3X2_F") => Self::Matrix3x2,
             (namespace, name) => Self::from_type_def(
                 &type_ref.reader.expect_type_def((namespace, name)),
                 calling_namespace,
@@ -387,6 +400,7 @@ impl TypeKind {
             Self::IUnknown => quote! { ::windows::IUnknown },
             Self::ErrorCode => quote! { ::windows::ErrorCode },
             Self::Bool32 => quote! { ::windows::BOOL },
+            Self::Matrix3x2 => quote! { ::windows::foundation::numerics::Matrix3x2 },
             Self::Class(name) => name.gen(),
             Self::Interface(name) => name.gen(),
             Self::Enum(name) => name.gen(),
@@ -396,6 +410,7 @@ impl TypeKind {
                 let name = format_ident(name);
                 quote! { #name }
             }
+            Self::NotYetSupported => quote! { ::windows::NOT_YET_SUPPORTED_TYPE },
         }
     }
 
@@ -422,6 +437,7 @@ impl TypeKind {
             Self::IUnknown => quote! { ::windows::IUnknown },
             Self::ErrorCode => quote! { ::windows::ErrorCode },
             Self::Bool32 => quote! { ::windows::BOOL },
+            Self::Matrix3x2 => quote! { ::windows::foundation::numerics::Matrix3x2 },
             Self::Class(name) => name.gen_full(),
             Self::Interface(name) => name.gen_full(),
             Self::Enum(name) => name.gen_full(),
@@ -431,6 +447,7 @@ impl TypeKind {
                 let name = format_ident(name);
                 quote! { #name }
             }
+            Self::NotYetSupported => quote!(::windows::NOT_YET_SUPPORTED_TYPE),
         }
     }
 
@@ -454,6 +471,7 @@ impl TypeKind {
             Self::Guid => quote! { ::windows::Guid },
             Self::ErrorCode => quote! { ::windows::ErrorCode },
             Self::Bool32 => quote! { ::windows::BOOL },
+            Self::Matrix3x2 => quote! { ::windows::foundation::numerics::Matrix3x2 },
             Self::String
             | Self::Object
             | Self::IUnknown
@@ -468,6 +486,7 @@ impl TypeKind {
             }
             Self::Enum(name) => name.gen(),
             Self::Struct(name) => name.gen_abi(),
+            Self::NotYetSupported => quote!(::windows::NOT_YET_SUPPORTED_TYPE),
         }
     }
 
@@ -491,6 +510,7 @@ impl TypeKind {
             Self::Guid => quote! { ::windows::Guid },
             Self::ErrorCode => quote! { ::windows::ErrorCode },
             Self::Bool32 => quote! { ::windows::BOOL },
+            Self::Matrix3x2 => quote! { ::windows::foundation::numerics::Matrix3x2 },
             Self::String
             | Self::Object
             | Self::IUnknown
@@ -505,6 +525,7 @@ impl TypeKind {
             }
             Self::Enum(name) => name.gen_full(),
             Self::Struct(name) => name.gen_full_abi(),
+            Self::NotYetSupported => quote!(::windows::NOT_YET_SUPPORTED_TYPE),
         }
     }
 

@@ -1,8 +1,5 @@
-extern crate windows_winmd as winmd;
-
 mod callback;
 mod class;
-mod com_class;
 mod com_interface;
 mod constant;
 mod delegate;
@@ -21,7 +18,6 @@ mod required_interface;
 mod signature;
 mod r#struct;
 mod to_snake;
-mod traits;
 mod r#type;
 mod type_definition;
 mod type_guid;
@@ -29,10 +25,10 @@ mod type_limits;
 mod type_name;
 mod type_namespaces;
 mod type_tree;
+pub mod winmd;
 
 pub use callback::*;
 pub use class::*;
-pub use com_class::*;
 pub use com_interface::*;
 pub use constant::*;
 pub use delegate::*;
@@ -52,7 +48,6 @@ pub use r#type::*;
 pub use required_interface::*;
 pub use signature::*;
 pub use to_snake::*;
-pub use traits::*;
 pub use type_definition::*;
 pub use type_guid::*;
 pub use type_limits::*;

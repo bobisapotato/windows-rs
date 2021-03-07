@@ -38,11 +38,9 @@ impl Enum {
         for field in name.def.fields() {
             if field.flags().literal() {
                 if let Some(constant) = field.constant() {
-                    let mut value = constant.value();
-
-                    let value = match constant.value_type() {
-                        winmd::ElementType::I32 => EnumConstant::I32(value.read_i32()),
-                        winmd::ElementType::U32 => EnumConstant::U32(value.read_u32()),
+                    let value = match constant.value() {
+                        winmd::ConstantValue::I32(value) => EnumConstant::I32(value),
+                        winmd::ConstantValue::U32(value) => EnumConstant::U32(value),
                         _ => panic!("Enum::from_type_def"),
                     };
 
@@ -125,6 +123,7 @@ impl Enum {
 
         quote! {
             #[allow(non_camel_case_types)]
+            #[derive(PartialEq, Eq)]
             #[repr(transparent)]
             pub struct #name(pub #underlying_type);
             impl ::std::convert::From<#underlying_type> for #name {
@@ -147,12 +146,6 @@ impl Enum {
                     write!(f, "{:?}", self.0)
                 }
             }
-            impl ::std::cmp::PartialEq for #name {
-                fn eq(&self, other: &Self) -> bool {
-                    self.0 == other.0
-                }
-            }
-            impl ::std::cmp::Eq for #name {}
             impl ::std::marker::Copy for #name {}
             impl #name {
                 #![allow(non_upper_case_globals)]

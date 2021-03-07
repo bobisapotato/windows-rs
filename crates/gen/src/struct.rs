@@ -8,6 +8,7 @@ pub struct Struct {
     pub fields: Vec<(String, Type)>,
     pub signature: String,
     pub is_typedef: bool,
+    pub guid: TypeGuid,
 }
 
 impl Struct {
@@ -24,7 +25,17 @@ impl Struct {
         let mut unique = BTreeSet::new();
 
         for field in name.def.fields() {
-            let t = Type::from_field(&field, &name.namespace);
+            if field.flags().literal() {
+                continue;
+            }
+
+            let mut t = Type::from_field(&field, &name.namespace);
+
+            // TODO: workaround for https://github.com/microsoft/win32metadata/issues/132
+            if let TypeKind::Delegate(_) = &t.kind {
+                t.pointers = 0;
+            }
+
             let mut field_name = to_snake(field.name());
 
             // A handful of Win32 structs, like `CIECHROMA` and `GenTspecParms`, have fields whose snake case
@@ -47,8 +58,10 @@ impl Struct {
             fields.push((field_name, t));
         }
 
+        let guid = TypeGuid::from_type_def(&name.def);
+
         // The C/C++ ABI assumes an empty struct occupies a single byte in memory.
-        if fields.is_empty() {
+        if fields.is_empty() && guid == TypeGuid::default() {
             let t = Type {
                 kind: TypeKind::U8,
                 pointers: 0,
@@ -74,6 +87,7 @@ impl Struct {
             fields,
             signature,
             is_typedef,
+            guid,
         }
     }
 
@@ -85,12 +99,15 @@ impl Struct {
     }
 
     pub fn gen(&self) -> TokenStream {
-        // TODO: workaround for https://github.com/microsoft/win32metadata/issues/132
-        if self.name.name == "VBS_BASIC_ENCLAVE_SYSCALL_PAGE" {
-            return TokenStream::new();
-        }
-
         let name = self.name.gen();
+
+        if self.guid != TypeGuid::default() {
+            let guid = self.name.gen_guid(&self.guid);
+
+            return quote! {
+                pub const #name: ::windows::Guid = #guid;
+            };
+        }
 
         // TODO: if the struct is blittable then don't generate a separate abi type.
         let abi_ident = format_ident!("{}_abi", self.name.name);
@@ -170,6 +187,21 @@ impl Struct {
                 Self{ #(#clones),* }
             }
         };
+
+        let constants = self.name.def.fields().filter_map(|field| {
+            if field.flags().literal() {
+                if let Some(constant) = field.constant() {
+                    let name = format_ident(field.name());
+                    let value = constant.value().gen();
+
+                    return Some(quote! {
+                        pub const #name: #value;
+                    });
+                }
+            }
+
+            None
+        });
 
         let debug_fields = self
             .fields
@@ -258,6 +290,9 @@ impl Struct {
             #[repr(C)]
             #[allow(non_snake_case)]
             pub struct #name #body
+            impl #name {
+                #(#constants)*
+            }
             #[repr(C)]
             #[doc(hidden)]
             pub struct #abi_ident(#(#abi),*);
