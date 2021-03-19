@@ -1,9 +1,8 @@
 use crate::*;
 
 use bindings::{
-    windows::win32::debug::{FormatMessageW, GetLastError},
+    windows::win32::debug::{FormatMessageW, GetLastError, FORMAT_MESSAGE_OPTIONS},
     windows::win32::system_services::PWSTR,
-    windows::win32::windows_programming::FORMAT_MESSAGE_OPTIONS,
 };
 
 /// A primitive error code value returned by most COM functions. An `ErrorCode` is sometimes called an `HRESULT`.
@@ -126,6 +125,9 @@ impl ErrorCode {
 
     /// The operation succeeded.
     pub const S_OK: ErrorCode = ErrorCode(0);
+
+    /// Completed without error, but only partial results were obtained.
+    pub const S_FALSE: ErrorCode = ErrorCode(1);
 
     /// The COM runtime has not been loaded.
     pub const CO_E_NOTINITIALIZED: ErrorCode = ErrorCode(0x8004_01F0);
