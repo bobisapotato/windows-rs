@@ -32,7 +32,16 @@ impl Struct {
             ("Windows.Foundation.Numerics", "Matrix3x2") => {
                 vec![reader.resolve_type("Windows.Win32.Direct2D", "D2D1MakeRotateMatrix")]
             }
-            _ => self.0.fields().map(|f| f.definition()).flatten().collect(),
+            _ => {
+                let mut dependencies: Vec<ElementType> =
+                    self.0.fields().map(|f| f.definition()).flatten().collect();
+
+                if let Some(dependency) = self.0.is_convertible() {
+                    dependencies.push(dependency);
+                }
+
+                dependencies
+            }
         }
     }
 
@@ -47,6 +56,14 @@ impl Struct {
         } else {
             self.0.fields().all(|f| f.is_blittable())
         }
+    }
+
+    pub fn is_packed(&self) -> bool {
+        if self.0.class_layout().is_some() {
+            return true;
+        }
+
+        self.0.fields().any(|field| field.signature().is_packed())
     }
 
     pub fn is_handle(&self) -> bool {
@@ -72,15 +89,13 @@ impl Struct {
 
         let name = to_ident(struct_name);
 
-        if let Some(guid) = Guid::from_type_def(&self.0) {
+        if let Some(guid) = Guid::from_attributes(self.0.attributes()) {
             let guid = guid.gen();
 
             return quote! {
                 pub const #name: ::windows::Guid = ::windows::Guid::from_values(#guid);
             };
         }
-
-        let mut field_names = BTreeMap::<String, u32>::new();
 
         let fields: Vec<(tables::Field, Signature, Ident)> = self
             .0
@@ -89,17 +104,7 @@ impl Struct {
                 if f.flags().literal() {
                     None
                 } else {
-                    let name = to_snake(f.name());
-                    let overload = field_names.entry(name.clone()).or_insert(0);
-                    *overload += 1;
-
-                    let name = if *overload > 1 {
-                        format_ident!("{}{}", &name, overload)
-                    } else {
-                        to_ident(&name)
-                    };
-
-                    Some((f, f.signature(), name))
+                    Some((f, f.signature(), to_ident(f.name())))
                 }
             })
             .collect();
@@ -107,7 +112,6 @@ impl Struct {
         if fields.is_empty() {
             return quote! {
                 #[repr(C)]
-                #[allow(non_snake_case)]
                 #[derive(::std::clone::Clone, ::std::default::Default, ::std::fmt::Debug, ::std::cmp::PartialEq, ::std::cmp::Eq, ::std::marker::Copy)]
                 pub struct #name(pub u8);
             };
@@ -116,11 +120,30 @@ impl Struct {
         let is_winrt = self.0.is_winrt();
         let is_handle = self.is_handle();
         let is_union = self.0.flags().explicit();
+        let layout = self.0.class_layout();
+        let is_packed = self.is_packed();
+
+        let repr = if let Some(layout) = layout {
+            let packing = Literal::u32_unsuffixed(layout.packing_size());
+            quote! { #[repr(C, packed(#packing))] }
+        } else {
+            quote! { #[repr(C)] }
+        };
 
         // TODO: add test for Windows.Win32.Security.TRUSTEE_A
         let has_union = fields
             .iter()
             .any(|(_, signature, _)| signature.is_explicit());
+
+        // TODO: workaround for getting windows-docs building
+        let has_complex_array = fields
+            .iter()
+            .any(|(_, signature, _)| match &signature.kind {
+                ElementType::Array((signature, _)) => {
+                    !signature.is_blittable() || signature.kind.is_nullable()
+                }
+                _ => false,
+            });
 
         let runtime_type = if is_winrt {
             let signature = Literal::byte_string(&self.type_signature().as_bytes());
@@ -139,7 +162,7 @@ impl Struct {
             quote! {
                 #[derive(::std::clone::Clone, ::std::marker::Copy)]
             }
-        } else if is_union || has_union {
+        } else if is_union || has_union || is_packed {
             quote! {}
         } else {
             quote! {
@@ -213,7 +236,7 @@ impl Struct {
             };
 
             quote! {
-                #[repr(C)]
+                #repr
                 #[doc(hidden)]
                 #[derive(::std::clone::Clone, ::std::marker::Copy)]
                 pub #struct_or_union #abi_name{ #fields }
@@ -238,7 +261,7 @@ impl Struct {
             None
         });
 
-        let compare = if is_union | has_union {
+        let compare = if is_union | has_union | has_complex_array | is_packed {
             quote! {}
         } else {
             let compare = fields
@@ -252,7 +275,7 @@ impl Struct {
                             self.#name.map(|f| f as usize) == other.#name.map(|f| f as usize)
                         }
                     } else if is_handle {
-                        let index = Literal::u32_unsuffixed(index as u32);
+                        let index = Literal::usize_unsuffixed(index);
 
                         quote! {
                             self.#index == other.#index
@@ -264,17 +287,28 @@ impl Struct {
                     }
                 });
 
-            quote! {
-                impl ::std::cmp::PartialEq for #name {
-                    fn eq(&self, other: &Self) -> bool {
-                        #(#compare)&&*
+            if layout.is_some() {
+                quote! {
+                    impl ::std::cmp::PartialEq for #name {
+                        fn eq(&self, other: &Self) -> bool {
+                            unsafe { #(#compare)&&* }
+                        }
                     }
+                    impl ::std::cmp::Eq for #name {}
                 }
-                impl ::std::cmp::Eq for #name {}
+            } else {
+                quote! {
+                    impl ::std::cmp::PartialEq for #name {
+                        fn eq(&self, other: &Self) -> bool {
+                            #(#compare)&&*
+                        }
+                    }
+                    impl ::std::cmp::Eq for #name {}
+                }
             }
         };
 
-        let default = if is_union || has_union {
+        let default = if is_union || has_union || has_complex_array || is_packed {
             quote! {}
         } else {
             let defaults = if is_handle {
@@ -310,7 +344,21 @@ impl Struct {
                 }
             };
 
+            let null = if is_handle {
+                quote! {
+                    impl #name {
+                        pub const NULL: Self = #defaults;
+                        pub fn is_null(&self) -> bool {
+                            self == &Self::NULL
+                        }
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
             quote! {
+                #null
                 impl ::std::default::Default for #name {
                     fn default() -> Self {
                         #defaults
@@ -319,7 +367,7 @@ impl Struct {
             }
         };
 
-        let debug = if is_union || has_union {
+        let debug = if is_union || has_union || has_complex_array || is_packed {
             quote! {}
         } else {
             let debug_name = self.0.name();
@@ -330,14 +378,20 @@ impl Struct {
                     .enumerate()
                     .filter_map(|(index, (_, signature, name))| {
                         // TODO: there must be a simpler way to implement Debug just to exclude this type.
-                        if let ElementType::Callback(_) = signature.kind {
-                            return None;
+                        match &signature.kind {
+                            ElementType::Callback(_) => return None,
+                            ElementType::Array((kind, _)) => {
+                                if let ElementType::Callback(_) = kind.kind {
+                                    return None;
+                                }
+                            }
+                            _ => {}
                         }
 
                         let field = name.as_str();
 
                         if is_handle {
-                            let index = Literal::u32_unsuffixed(index as u32);
+                            let index = Literal::usize_unsuffixed(index);
 
                             Some(quote! {
                                 .field(#field, &format_args!("{:?}", self.#index))
@@ -349,24 +403,50 @@ impl Struct {
                         }
                     });
 
-            quote! {
-                impl ::std::fmt::Debug for #name {
-                    fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        fmt.debug_struct(#debug_name)
-                            #(#debug_fields)*
-                            .finish()
+            if layout.is_some() {
+                quote! {
+                    impl ::std::fmt::Debug for #name {
+                        fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                            unsafe {
+                                fmt.debug_struct(#debug_name)
+                                    #(#debug_fields)*
+                                    .finish()
+                            }
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    impl ::std::fmt::Debug for #name {
+                        fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                            fmt.debug_struct(#debug_name)
+                                #(#debug_fields)*
+                                .finish()
+                        }
                     }
                 }
             }
         };
 
         let extensions = self.gen_extensions();
-
         let nested_types = gen_nested_types(struct_name, &self.0, gen);
 
+        let convertible = if let Some(dependency) = self.0.is_convertible() {
+            let dependency = dependency.gen_name(gen);
+
+            quote! {
+                impl<'a> ::windows::IntoParam<'a, #dependency> for #name {
+                    fn into_param(self) -> ::windows::Param<'a, #dependency> {
+                        ::windows::Param::Owned(#dependency(self.0))
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         quote! {
-            #[repr(C)]
-            #[allow(non_snake_case)]
+            #repr
             #clone_or_copy
             pub #struct_or_union #name #body
             impl #name {
@@ -379,1310 +459,29 @@ impl Struct {
             #runtime_type
             #extensions
             #nested_types
+            #convertible
         }
     }
 
     fn gen_replacement(&self) -> Option<TokenStream> {
         match self.0.full_name() {
-            ("Windows.Win32.SystemServices", "BOOL") => Some(quote! {
-                #[repr(C)]
-                #[allow(non_snake_case)]
-                #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::cmp::Eq, ::std::default::Default)]
-                pub struct BOOL(pub i32);
-                impl BOOL {
-                    #[inline]
-                    pub fn as_bool(self) -> bool {
-                        !(self.0 == 0)
-                    }
-                    #[inline]
-                    pub fn ok(self) -> ::windows::Result<()> {
-                        if self.as_bool() {
-                            Ok(())
-                        } else {
-                            Err(::windows::ErrorCode::from_thread().into())
-                        }
-                    }
-                    #[inline]
-                    pub fn unwrap(self) {
-                        self.ok().unwrap();
-                    }
-                    #[inline]
-                    pub fn expect(self, msg: &str) {
-                        self.ok().expect(msg);
-                    }
-                }
-                impl ::std::fmt::Debug for BOOL {
-                    fn fmt(&self, fmt: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        let msg = if self.as_bool() { "true" } else { "false" };
-                        fmt.write_str(msg)
-                    }
-                }
-                unsafe impl ::windows::Abi for BOOL {
-                    type Abi = Self;
-                }
-                impl ::std::convert::From<BOOL> for bool {
-                    fn from(value: BOOL) -> Self {
-                        value.as_bool()
-                    }
-                }
-
-                impl ::std::convert::From<&BOOL> for bool {
-                    fn from(value: &BOOL) -> Self {
-                        value.as_bool()
-                    }
-                }
-
-                impl ::std::convert::From<bool> for BOOL {
-                    fn from(value: bool) -> Self {
-                        if value {
-                            BOOL(1)
-                        } else {
-                            BOOL(0)
-                        }
-                    }
-                }
-
-                impl ::std::convert::From<&bool> for BOOL {
-                    fn from(value: &bool) -> Self {
-                        (*value).into()
-                    }
-                }
-
-
-
-                impl ::std::cmp::PartialEq<bool> for BOOL {
-                    fn eq(&self, other: &bool) -> bool {
-                        self.as_bool() == *other
-                    }
-                }
-
-                impl ::std::cmp::PartialEq<BOOL> for bool {
-                    fn eq(&self, other: &BOOL) -> bool {
-                        *self == other.as_bool()
-                    }
-                }
-
-                impl std::ops::Not for BOOL {
-                    type Output = Self;
-                    fn not(self) -> Self::Output {
-                        if self.as_bool() {
-                            BOOL(0)
-                        } else {
-                            BOOL(1)
-                        }
-                    }
-                }
-                impl<'a> ::windows::IntoParam<'a, BOOL> for bool {
-                    fn into_param(self) -> ::windows::Param<'a, BOOL> {
-                        ::windows::Param::Owned(self.into())
-                    }
-                }
-            }),
-
-            ("Windows.Win32.SystemServices", "PWSTR") => Some(quote! {
-                #[repr(C)]
-                #[allow(non_snake_case)]
-                #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::Eq, ::std::fmt::Debug)]
-                pub struct PWSTR(pub *mut u16);
-                impl ::std::default::Default for PWSTR {
-                    fn default() -> Self {
-                        Self(::std::ptr::null_mut())
-                    }
-                }
-                // TODO: impl Debug and Display to display value and PartialEq etc
-                impl ::std::cmp::PartialEq for PWSTR {
-                    fn eq(&self, other: &Self) -> bool {
-                        // TODO: do value compare
-                        self.0 == other.0
-                    }
-                }
-                unsafe impl ::windows::Abi for PWSTR {
-                    type Abi = Self;
-
-                    fn drop_param(param: &mut ::windows::Param<Self>) {
-                        if let ::windows::Param::Boxed(value) = param {
-                            if !value.0.is_null() {
-                                unsafe { ::std::boxed::Box::from_raw(value.0); }
-                            }
-                        }
-                    }
-                }
-                impl<'a> ::windows::IntoParam<'a, PWSTR> for &'a str {
-                    fn into_param(self) -> ::windows::Param<'a, PWSTR> {
-                        ::windows::Param::Boxed(PWSTR(::std::boxed::Box::<[u16]>::into_raw(self.encode_utf16().chain(::std::iter::once(0)).collect::<std::vec::Vec<u16>>().into_boxed_slice()) as _))
-                    }
-                }
-                impl<'a> ::windows::IntoParam<'a, PWSTR> for String {
-                    fn into_param(self) -> ::windows::Param<'a, PWSTR> {
-                        // TODO: call variant above
-                        ::windows::Param::Boxed(PWSTR(::std::boxed::Box::<[u16]>::into_raw(self.encode_utf16().chain(::std::iter::once(0)).collect::<std::vec::Vec<u16>>().into_boxed_slice()) as _))
-                    }
-                }
-            }),
-            ("Windows.Win32.SystemServices", "PSTR") => Some(quote! {
-                #[repr(C)]
-                #[allow(non_snake_case)]
-                #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::Eq, ::std::fmt::Debug)]
-                pub struct PSTR(pub *mut u8);
-                impl ::std::default::Default for PSTR {
-                    fn default() -> Self {
-                        Self(::std::ptr::null_mut())
-                    }
-                }
-                // TODO: impl Debug and Display to display value and PartialEq etc
-                impl ::std::cmp::PartialEq for PSTR {
-                    fn eq(&self, other: &Self) -> bool {
-                        // TODO: do value compare
-                        self.0 == other.0
-                    }
-                }
-                unsafe impl ::windows::Abi for PSTR {
-                    type Abi = Self;
-
-                    fn drop_param(param: &mut ::windows::Param<Self>) {
-                        if let ::windows::Param::Boxed(value) = param {
-                            if !value.0.is_null() {
-                                unsafe { ::std::boxed::Box::from_raw(value.0); }
-                            }
-                        }
-                    }
-                }
-                impl<'a> ::windows::IntoParam<'a, PSTR> for &'a str {
-                    fn into_param(self) -> ::windows::Param<'a, PSTR> {
-                        ::windows::Param::Boxed(PSTR(::std::boxed::Box::<[u8]>::into_raw(self.bytes().chain(::std::iter::once(0)).collect::<std::vec::Vec<u8>>().into_boxed_slice()) as _))
-                    }
-                }
-                impl<'a> ::windows::IntoParam<'a, PSTR> for String {
-                    fn into_param(self) -> ::windows::Param<'a, PSTR> {
-                        // TODO: call variant above
-                        ::windows::Param::Boxed(PSTR(::std::boxed::Box::<[u8]>::into_raw(self.bytes().chain(::std::iter::once(0)).collect::<std::vec::Vec<u8>>().into_boxed_slice()) as _))
-                    }
-                }
-            }),
-            // TODO: This can be an extension rather than replacement?
-            ("Windows.Win32.Automation", "BSTR") => Some(quote! {
-                #[repr(C)]
-                #[allow(non_snake_case)]
-                #[derive(::std::clone::Clone, ::std::cmp::Eq)]
-                pub struct BSTR(*mut u16);
-                impl BSTR {
-                    pub fn is_empty(&self) -> bool {
-                        self.0.is_null()
-                    }
-                    fn from_wide(value: &[u16]) -> Self {
-                        if value.len() == 0 {
-                            return Self(::std::ptr::null_mut());
-                        }
-
-                        unsafe { SysAllocStringLen(super::system_services::PWSTR(value.as_ptr() as _), value.len() as u32) }
-                    }
-                    fn as_wide(&self) -> &[u16] {
-                        if self.0.is_null() {
-                            return &[];
-                        }
-
-                        unsafe { ::std::slice::from_raw_parts(self.0 as *const u16, SysStringLen(self) as usize) }
-                    }
-                }
-                impl  std::convert::From<&str> for BSTR {
-                    fn from(value: &str) -> Self {
-                        let value: ::std::vec::Vec<u16> = value.encode_utf16().collect();
-                        Self::from_wide(&value)
-                    }
-                }
-
-                impl  std::convert::From<::std::string::String> for BSTR {
-                    fn from(value: ::std::string::String) -> Self {
-                        value.as_str().into()
-                    }
-                }
-
-                impl  ::std::convert::From<&::std::string::String> for BSTR {
-                    fn from(value: &::std::string::String) -> Self {
-                        value.as_str().into()
-                    }
-                }
-                impl<'a> ::std::convert::TryFrom<&'a BSTR> for ::std::string::String {
-                    type Error = ::std::string::FromUtf16Error;
-
-                    fn try_from(value: &BSTR) -> ::std::result::Result<Self, Self::Error> {
-                        ::std::string::String::from_utf16(value.as_wide())
-                    }
-                }
-
-                impl ::std::convert::TryFrom<BSTR> for ::std::string::String {
-                    type Error = ::std::string::FromUtf16Error;
-
-                    fn try_from(value: BSTR) -> ::std::result::Result<Self, Self::Error> {
-                        ::std::string::String::try_from(&value)
-                    }
-                }
-                impl ::std::default::Default for BSTR {
-                    fn default() -> Self {
-                        Self(::std::ptr::null_mut())
-                    }
-                }
-                impl ::std::fmt::Display for BSTR {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        use ::std::fmt::Write;
-                        for c in ::std::char::decode_utf16(self.as_wide().iter().cloned()) {
-                            f.write_char(c.map_err(|_| ::std::fmt::Error)?)?
-                        }
-                        Ok(())
-                    }
-                }
-                impl ::std::fmt::Debug for BSTR {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        ::std::write!(f, "{}", self)
-                    }
-                }
-                impl ::std::cmp::PartialEq for BSTR {
-                    fn eq(&self, other: &Self) -> bool {
-                        self.as_wide() == other.as_wide()
-                    }
-                }
-                impl ::std::cmp::PartialEq<::std::string::String> for BSTR {
-                    fn eq(&self, other: &::std::string::String) -> bool {
-                        self == other.as_str()
-                    }
-                }
-                impl ::std::cmp::PartialEq<str> for BSTR {
-                    fn eq(&self, other: &str) -> bool {
-                        self == other
-                    }
-                }
-                impl ::std::cmp::PartialEq<&str> for BSTR {
-                    fn eq(&self, other: &&str) -> bool {
-                        self.as_wide().iter().copied().eq(other.encode_utf16())
-                    }
-                }
-
-                impl ::std::cmp::PartialEq<BSTR> for &str {
-                    fn eq(&self, other: &BSTR) -> bool {
-                        other == self
-                    }
-                }
-                impl ::std::ops::Drop for BSTR {
-                    fn drop(&mut self) {
-                        if !self.0.is_null() {
-                            unsafe { SysFreeString(self as &Self); }
-                        }
-                    }
-                }
-                unsafe impl ::windows::Abi for BSTR {
-                    type Abi = *mut u16;
-
-                    fn set_abi(&mut self) -> *mut *mut u16 {
-                        debug_assert!(self.0.is_null());
-                        &mut self.0 as *mut _ as _
-                    }
-                }
-                #[allow(non_camel_case_types)]
-                pub type BSTR_abi = *mut u16;
-            }),
+            ("Windows.Win32.SystemServices", "BOOL") => Some(gen_bool32()),
+            ("Windows.Win32.SystemServices", "PWSTR") => Some(gen_pwstr()),
+            ("Windows.Win32.SystemServices", "PSTR") => Some(gen_pstr()),
+            ("Windows.Win32.Automation", "BSTR") => Some(gen_bstr()),
             _ => None,
         }
     }
 
     fn gen_extensions(&self) -> TokenStream {
         match self.0.full_name() {
-            ("Windows.Foundation", "TimeSpan") => quote! {
-                impl ::std::convert::From<::std::time::Duration> for TimeSpan {
-                    fn from(value: ::std::time::Duration) -> Self {
-                        Self {
-                            duration: (value.as_nanos() / 100) as i64,
-                        }
-                    }
-                }
-                impl ::std::convert::From<TimeSpan> for ::std::time::Duration {
-                    fn from(value: TimeSpan) -> Self {
-                        ::std::time::Duration::from_nanos((value.duration * 100) as u64)
-                    }
-                }
-                impl<'a> ::windows::IntoParam<'a, TimeSpan> for ::std::time::Duration {
-                    fn into_param(self) -> ::windows::Param<'a, TimeSpan> {
-                        ::windows::Param::Owned(self.into())
-                    }
-                }
-            },
-            ("Windows.Foundation.Numerics", "Vector2") => quote! {
-                impl Vector2 {
-                    pub fn zero() -> Self {
-                        Self { x: 0f32, y: 0f32 }
-                    }
-                    pub fn one() -> Self {
-                        Self { x: 1f32, y: 1f32 }
-                    }
-                    pub fn unit_x() -> Self {
-                        Self { x: 1.0, y: 0.0 }
-                    }
-                    pub fn unit_y() -> Self {
-                        Self { x: 0.0, y: 1.0 }
-                    }
-                    pub fn dot(&self, rhs: &Self) -> f32 {
-                        self.x * rhs.x + self.y * rhs.y
-                    }
-                    pub fn length_squared(&self) -> f32 {
-                        self.dot(self)
-                    }
-                    pub fn length(&self) -> f32 {
-                        self.length_squared().sqrt()
-                    }
-                    pub fn distance(&self, value: &Self) -> f32 {
-                        (self - value).length()
-                    }
-                    pub fn distance_squared(&self, value: &Self) -> f32 {
-                        (self - value).length_squared()
-                    }
-                    pub fn normalize(&self) -> Self {
-                        self / self.length()
-                    }
-
-                    fn impl_add(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x + rhs.x,
-                            y: self.y + rhs.y,
-                        }
-                    }
-                    fn impl_sub(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x - rhs.x,
-                            y: self.y - rhs.y,
-                        }
-                    }
-                    fn impl_div(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x / rhs.x,
-                            y: self.y / rhs.y,
-                        }
-                    }
-                    fn impl_div_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            x: self.x / rhs,
-                            y: self.y / rhs,
-                        }
-                    }
-                    fn impl_mul(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x * rhs.x,
-                            y: self.y * rhs.y,
-                        }
-                    }
-                    fn impl_mul_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            x: self.x * rhs,
-                            y: self.y * rhs,
-                        }
-                    }
-                }
-
-                impl ::std::ops::Add<Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn add(self, rhs: Vector2) -> Vector2 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn add(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Add<Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn add(self, rhs: Vector2) -> Vector2 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn add(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn sub(self, rhs: Vector2) -> Vector2 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn sub(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn sub(self, rhs: Vector2) -> Vector2 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn sub(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Div<Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn div(self, rhs: Vector2) -> Vector2 {
-                        self.impl_div(&rhs)
-                    }
-                }
-                impl ::std::ops::Div<&Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn div(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_div(rhs)
-                    }
-                }
-                impl ::std::ops::Div<Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn div(self, rhs: Vector2) -> Vector2 {
-                        self.impl_div(&rhs)
-                    }
-                }
-                impl ::std::ops::Div<&Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn div(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_div(rhs)
-                    }
-                }
-                impl ::std::ops::Div<f32> for Vector2 {
-                    type Output = Vector2;
-                    fn div(self, rhs: f32) -> Vector2 {
-                        self.impl_div_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Div<f32> for &Vector2 {
-                    type Output = Vector2;
-                    fn div(self, rhs: f32) -> Vector2 {
-                        self.impl_div_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn mul(self, rhs: Vector2) -> Vector2 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Vector2> for Vector2 {
-                    type Output = Vector2;
-                    fn mul(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn mul(self, rhs: Vector2) -> Vector2 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Vector2> for &Vector2 {
-                    type Output = Vector2;
-                    fn mul(self, rhs: &Vector2) -> Vector2 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for Vector2 {
-                    type Output = Vector2;
-                    fn mul(self, rhs: f32) -> Vector2 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for &Vector2 {
-                    type Output = Vector2;
-                    fn mul(self, rhs: f32) -> Vector2 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-            },
-            ("Windows.Foundation.Numerics", "Vector3") => quote! {
-                impl Vector3 {
-                    pub fn zero() -> Self {
-                        Self {
-                            x: 0f32,
-                            y: 0f32,
-                            z: 0f32,
-                        }
-                    }
-                    pub fn one() -> Self {
-                        Self {
-                            x: 1f32,
-                            y: 1f32,
-                            z: 1f32,
-                        }
-                    }
-                    pub fn unit_x() -> Self {
-                        Self {
-                            x: 1.0,
-                            y: 0.0,
-                            z: 0.0,
-                        }
-                    }
-                    pub fn unit_y() -> Self {
-                        Self {
-                            x: 0.0,
-                            y: 1.0,
-                            z: 0.0,
-                        }
-                    }
-                    pub fn unit_z() -> Self {
-                        Self {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 1.0,
-                        }
-                    }
-                    pub fn dot(&self, rhs: &Self) -> f32 {
-                        self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
-                    }
-                    pub fn length_squared(&self) -> f32 {
-                        self.dot(self)
-                    }
-                    pub fn length(&self) -> f32 {
-                        self.length_squared().sqrt()
-                    }
-                    pub fn distance(&self, value: &Self) -> f32 {
-                        (self - value).length()
-                    }
-                    pub fn distance_squared(&self, value: &Self) -> f32 {
-                        (self - value).length_squared()
-                    }
-                    pub fn normalize(&self) -> Self {
-                        self / self.length()
-                    }
-
-                    fn impl_add(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x + rhs.x,
-                            y: self.y + rhs.y,
-                            z: self.z + rhs.z,
-                        }
-                    }
-                    fn impl_sub(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x - rhs.x,
-                            y: self.y - rhs.y,
-                            z: self.z - rhs.z,
-                        }
-                    }
-                    fn impl_div(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x / rhs.x,
-                            y: self.y / rhs.y,
-                            z: self.z / rhs.z,
-                        }
-                    }
-                    fn impl_div_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            x: self.x / rhs,
-                            y: self.y / rhs,
-                            z: self.z / rhs,
-                        }
-                    }
-                    fn impl_mul(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x * rhs.x,
-                            y: self.y * rhs.y,
-                            z: self.z * rhs.z,
-                        }
-                    }
-                    fn impl_mul_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            x: self.x * rhs,
-                            y: self.y * rhs,
-                            z: self.z * rhs,
-                        }
-                    }
-                }
-
-                impl ::std::ops::Add<Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn add(self, rhs: Vector3) -> Vector3 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn add(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Add<Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn add(self, rhs: Vector3) -> Vector3 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn add(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn sub(self, rhs: Vector3) -> Vector3 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn sub(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn sub(self, rhs: Vector3) -> Vector3 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn sub(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Div<Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn div(self, rhs: Vector3) -> Vector3 {
-                        self.impl_div(&rhs)
-                    }
-                }
-                impl ::std::ops::Div<&Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn div(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_div(rhs)
-                    }
-                }
-                impl ::std::ops::Div<Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn div(self, rhs: Vector3) -> Vector3 {
-                        self.impl_div(&rhs)
-                    }
-                }
-                impl ::std::ops::Div<&Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn div(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_div(rhs)
-                    }
-                }
-                impl ::std::ops::Div<f32> for Vector3 {
-                    type Output = Vector3;
-                    fn div(self, rhs: f32) -> Vector3 {
-                        self.impl_div_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Div<f32> for &Vector3 {
-                    type Output = Vector3;
-                    fn div(self, rhs: f32) -> Vector3 {
-                        self.impl_div_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn mul(self, rhs: Vector3) -> Vector3 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Vector3> for Vector3 {
-                    type Output = Vector3;
-                    fn mul(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn mul(self, rhs: Vector3) -> Vector3 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Vector3> for &Vector3 {
-                    type Output = Vector3;
-                    fn mul(self, rhs: &Vector3) -> Vector3 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for Vector3 {
-                    type Output = Vector3;
-                    fn mul(self, rhs: f32) -> Vector3 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for &Vector3 {
-                    type Output = Vector3;
-                    fn mul(self, rhs: f32) -> Vector3 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-            },
-            ("Windows.Foundation.Numerics", "Vector4") => quote! {
-                impl Vector4 {
-                    pub fn zero() -> Self {
-                        Self {
-                            x: 0f32,
-                            y: 0f32,
-                            z: 0f32,
-                            w: 0f32,
-                        }
-                    }
-                    pub fn one() -> Self {
-                        Self {
-                            x: 1f32,
-                            y: 1f32,
-                            z: 1f32,
-                            w: 1f32,
-                        }
-                    }
-                    pub fn unit_x() -> Self {
-                        Self {
-                            x: 1.0,
-                            y: 0.0,
-                            z: 0.0,
-                            w: 0.0,
-                        }
-                    }
-                    pub fn unit_y() -> Self {
-                        Self {
-                            x: 0.0,
-                            y: 1.0,
-                            z: 0.0,
-                            w: 0.0,
-                        }
-                    }
-                    pub fn unit_z() -> Self {
-                        Self {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 1.0,
-                            w: 0.0,
-                        }
-                    }
-                    pub fn unit_w() -> Self {
-                        Self {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                            w: 1.0,
-                        }
-                    }
-                    pub fn dot(&self, rhs: &Self) -> f32 {
-                        self.x * rhs.x + self.y * rhs.y + self.z * rhs.z + self.w * rhs.w
-                    }
-                    pub fn length_squared(&self) -> f32 {
-                        self.dot(self)
-                    }
-                    pub fn length(&self) -> f32 {
-                        self.length_squared().sqrt()
-                    }
-                    pub fn distance(&self, value: &Self) -> f32 {
-                        (self - value).length()
-                    }
-                    pub fn distance_squared(&self, value: &Self) -> f32 {
-                        (self - value).length_squared()
-                    }
-                    pub fn normalize(&self) -> Self {
-                        self / self.length()
-                    }
-
-                    fn impl_add(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x + rhs.x,
-                            y: self.y + rhs.y,
-                            z: self.z + rhs.z,
-                            w: self.w + rhs.w,
-                        }
-                    }
-                    fn impl_sub(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x - rhs.x,
-                            y: self.y - rhs.y,
-                            z: self.z - rhs.z,
-                            w: self.w - rhs.w,
-                        }
-                    }
-                    fn impl_div(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x / rhs.x,
-                            y: self.y / rhs.y,
-                            z: self.z / rhs.z,
-                            w: self.w / rhs.w,
-                        }
-                    }
-                    fn impl_div_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            x: self.x / rhs,
-                            y: self.y / rhs,
-                            z: self.z / rhs,
-                            w: self.w / rhs,
-                        }
-                    }
-                    fn impl_mul(&self, rhs: &Self) -> Self {
-                        Self {
-                            x: self.x * rhs.x,
-                            y: self.y * rhs.y,
-                            z: self.z * rhs.z,
-                            w: self.w * rhs.w,
-                        }
-                    }
-                    fn impl_mul_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            x: self.x * rhs,
-                            y: self.y * rhs,
-                            z: self.z * rhs,
-                            w: self.w * rhs,
-                        }
-                    }
-                }
-
-                impl ::std::ops::Add<Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn add(self, rhs: Vector4) -> Vector4 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn add(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Add<Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn add(self, rhs: Vector4) -> Vector4 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn add(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn sub(self, rhs: Vector4) -> Vector4 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn sub(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn sub(self, rhs: Vector4) -> Vector4 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn sub(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Div<Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn div(self, rhs: Vector4) -> Vector4 {
-                        self.impl_div(&rhs)
-                    }
-                }
-                impl ::std::ops::Div<&Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn div(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_div(rhs)
-                    }
-                }
-                impl ::std::ops::Div<Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn div(self, rhs: Vector4) -> Vector4 {
-                        self.impl_div(&rhs)
-                    }
-                }
-                impl ::std::ops::Div<&Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn div(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_div(rhs)
-                    }
-                }
-                impl ::std::ops::Div<f32> for Vector4 {
-                    type Output = Vector4;
-                    fn div(self, rhs: f32) -> Vector4 {
-                        self.impl_div_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Div<f32> for &Vector4 {
-                    type Output = Vector4;
-                    fn div(self, rhs: f32) -> Vector4 {
-                        self.impl_div_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn mul(self, rhs: Vector4) -> Vector4 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Vector4> for Vector4 {
-                    type Output = Vector4;
-                    fn mul(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn mul(self, rhs: Vector4) -> Vector4 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Vector4> for &Vector4 {
-                    type Output = Vector4;
-                    fn mul(self, rhs: &Vector4) -> Vector4 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for Vector4 {
-                    type Output = Vector4;
-                    fn mul(self, rhs: f32) -> Vector4 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for &Vector4 {
-                    type Output = Vector4;
-                    fn mul(self, rhs: f32) -> Vector4 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-            },
-            ("Windows.Foundation.Numerics", "Matrix3x2") => quote! {
-                impl Matrix3x2 {
-                    pub fn identity() -> Self {
-                        Self {
-                            m11: 1.0,
-                            m12: 0.0,
-                            m21: 0.0,
-                            m22: 1.0,
-                            m31: 0.0,
-                            m32: 0.0,
-                        }
-                    }
-                    pub fn translation(x: f32, y: f32) -> Self {
-                        Self {
-                            m11: 1.0,
-                            m12: 0.0,
-                            m21: 0.0,
-                            m22: 1.0,
-                            m31: x,
-                            m32: y,
-                        }
-                    }
-                    pub fn rotation(angle: f32, x: f32, y: f32) -> Self {
-                        let mut matrix = Self::default();
-                        unsafe {
-                            super::super::win32::direct2d::D2D1MakeRotateMatrix(angle, super::super::win32::direct2d::D2D_POINT_2F{x, y}, &mut matrix);
-                        }
-                        matrix
-                    }
-                    fn impl_add(&self, rhs: &Self) -> Self {
-                        Self {
-                            m11: self.m11 + rhs.m11,
-                            m12: self.m12 + rhs.m12,
-                            m21: self.m21 + rhs.m21,
-                            m22: self.m22 + rhs.m22,
-                            m31: self.m31 + rhs.m31,
-                            m32: self.m32 + rhs.m32,
-                        }
-                    }
-                    fn impl_sub(&self, rhs: &Self) -> Self {
-                        Self {
-                            m11: self.m11 - rhs.m11,
-                            m12: self.m12 - rhs.m12,
-                            m21: self.m21 - rhs.m21,
-                            m22: self.m22 - rhs.m22,
-                            m31: self.m31 - rhs.m31,
-                            m32: self.m32 - rhs.m32,
-                        }
-                    }
-                    fn impl_mul(&self, rhs: &Self) -> Self {
-                        Self {
-                            m11: self.m11 * rhs.m11 + self.m12 * rhs.m21,
-                            m12: self.m11 * rhs.m12 + self.m12 * rhs.m22,
-                            m21: self.m21 * rhs.m11 + self.m22 * rhs.m21,
-                            m22: self.m21 * rhs.m12 + self.m22 * rhs.m22,
-                            m31: self.m31 * rhs.m11 + self.m32 * rhs.m21 + rhs.m31,
-                            m32: self.m31 * rhs.m12 + self.m32 * rhs.m22 + rhs.m32,
-                        }
-                    }
-                    fn impl_mul_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            m11: self.m11 * rhs,
-                            m12: self.m12 * rhs,
-                            m21: self.m21 * rhs,
-                            m22: self.m22 * rhs,
-                            m31: self.m31 * rhs,
-                            m32: self.m32 * rhs,
-                        }
-                    }
-                }
-
-                impl ::std::ops::Add<Matrix3x2> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn add(self, rhs: Matrix3x2) -> Matrix3x2 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Matrix3x2> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn add(self, rhs: &Matrix3x2) -> Matrix3x2 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Add<Matrix3x2> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn add(self, rhs: Matrix3x2) -> Matrix3x2 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Matrix3x2> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn add(self, rhs: &Matrix3x2) -> Matrix3x2 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Matrix3x2> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn sub(self, rhs: Matrix3x2) -> Matrix3x2 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Matrix3x2> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn sub(self, rhs: &Matrix3x2) -> Matrix3x2 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Matrix3x2> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn sub(self, rhs: Matrix3x2) -> Matrix3x2 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Matrix3x2> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn sub(self, rhs: &Matrix3x2) -> Matrix3x2 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Matrix3x2> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn mul(self, rhs: Matrix3x2) -> Matrix3x2 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Matrix3x2> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn mul(self, rhs: &Matrix3x2) -> Matrix3x2 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Matrix3x2> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn mul(self, rhs: Matrix3x2) -> Matrix3x2 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Matrix3x2> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn mul(self, rhs: &Matrix3x2) -> Matrix3x2 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn mul(self, rhs: f32) -> Matrix3x2 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for &Matrix3x2 {
-                    type Output = Matrix3x2;
-                    fn mul(self, rhs: f32) -> Matrix3x2 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-            },
-            ("Windows.Foundation.Numerics", "Matrix4x4") => quote! {
-                impl Matrix4x4 {
-                    fn impl_add(&self, rhs: &Self) -> Self {
-                        Self {
-                            m11: self.m11 + rhs.m11,
-                            m12: self.m12 + rhs.m12,
-                            m13: self.m13 + rhs.m13,
-                            m14: self.m14 + rhs.m14,
-                            m21: self.m21 + rhs.m21,
-                            m22: self.m22 + rhs.m22,
-                            m23: self.m23 + rhs.m23,
-                            m24: self.m24 + rhs.m24,
-                            m31: self.m31 + rhs.m31,
-                            m32: self.m32 + rhs.m32,
-                            m33: self.m33 + rhs.m33,
-                            m34: self.m34 + rhs.m34,
-                            m41: self.m41 + rhs.m41,
-                            m42: self.m42 + rhs.m42,
-                            m43: self.m43 + rhs.m43,
-                            m44: self.m44 + rhs.m44,
-                        }
-                    }
-                    fn impl_sub(&self, rhs: &Self) -> Self {
-                        Self {
-                            m11: self.m11 - rhs.m11,
-                            m12: self.m12 - rhs.m12,
-                            m13: self.m13 - rhs.m13,
-                            m14: self.m14 - rhs.m14,
-                            m21: self.m21 - rhs.m21,
-                            m22: self.m22 - rhs.m22,
-                            m23: self.m23 - rhs.m23,
-                            m24: self.m24 - rhs.m24,
-                            m31: self.m31 - rhs.m31,
-                            m32: self.m32 - rhs.m32,
-                            m33: self.m33 - rhs.m33,
-                            m34: self.m34 - rhs.m34,
-                            m41: self.m41 - rhs.m41,
-                            m42: self.m42 - rhs.m42,
-                            m43: self.m43 - rhs.m43,
-                            m44: self.m44 - rhs.m44,
-                        }
-                    }
-                    fn impl_mul(&self, rhs: &Self) -> Self {
-                        Self {
-                            m11: self.m11 * rhs.m11 + self.m12 * rhs.m21 + self.m13 * rhs.m31 + self.m14 * rhs.m41,
-                            m12: self.m11 * rhs.m12 + self.m12 * rhs.m22 + self.m13 * rhs.m32 + self.m14 * rhs.m42,
-                            m13: self.m11 * rhs.m13 + self.m12 * rhs.m23 + self.m13 * rhs.m33 + self.m14 * rhs.m43,
-                            m14: self.m11 * rhs.m14 + self.m12 * rhs.m24 + self.m13 * rhs.m34 + self.m14 * rhs.m44,
-                            m21: self.m21 * rhs.m11 + self.m22 * rhs.m21 + self.m23 * rhs.m31 + self.m24 * rhs.m41,
-                            m22: self.m21 * rhs.m12 + self.m22 * rhs.m22 + self.m23 * rhs.m32 + self.m24 * rhs.m42,
-                            m23: self.m21 * rhs.m13 + self.m22 * rhs.m23 + self.m23 * rhs.m33 + self.m24 * rhs.m43,
-                            m24: self.m21 * rhs.m14 + self.m22 * rhs.m24 + self.m23 * rhs.m34 + self.m24 * rhs.m44,
-                            m31: self.m31 * rhs.m11 + self.m32 * rhs.m21 + self.m33 * rhs.m31 + self.m34 * rhs.m41,
-                            m32: self.m31 * rhs.m12 + self.m32 * rhs.m22 + self.m33 * rhs.m32 + self.m34 * rhs.m42,
-                            m33: self.m31 * rhs.m13 + self.m32 * rhs.m23 + self.m33 * rhs.m33 + self.m34 * rhs.m43,
-                            m34: self.m31 * rhs.m14 + self.m32 * rhs.m24 + self.m33 * rhs.m34 + self.m34 * rhs.m44,
-                            m41: self.m41 * rhs.m11 + self.m42 * rhs.m21 + self.m43 * rhs.m31 + self.m44 * rhs.m41,
-                            m42: self.m41 * rhs.m12 + self.m42 * rhs.m22 + self.m43 * rhs.m32 + self.m44 * rhs.m42,
-                            m43: self.m41 * rhs.m13 + self.m42 * rhs.m23 + self.m43 * rhs.m33 + self.m44 * rhs.m43,
-                            m44: self.m41 * rhs.m14 + self.m42 * rhs.m24 + self.m43 * rhs.m34 + self.m44 * rhs.m44,
-                        }
-                    }
-                    fn impl_mul_f32(&self, rhs: f32) -> Self {
-                        Self {
-                            m11: self.m11 * rhs,
-                            m12: self.m12 * rhs,
-                            m13: self.m13 * rhs,
-                            m14: self.m14 * rhs,
-                            m21: self.m21 * rhs,
-                            m22: self.m22 * rhs,
-                            m23: self.m23 * rhs,
-                            m24: self.m24 * rhs,
-                            m31: self.m31 * rhs,
-                            m32: self.m32 * rhs,
-                            m33: self.m33 * rhs,
-                            m34: self.m34 * rhs,
-                            m41: self.m41 * rhs,
-                            m42: self.m42 * rhs,
-                            m43: self.m43 * rhs,
-                            m44: self.m44 * rhs,
-                        }
-                    }
-                }
-
-                impl ::std::ops::Add<Matrix4x4> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn add(self, rhs: Matrix4x4) -> Matrix4x4 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Matrix4x4> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn add(self, rhs: &Matrix4x4) -> Matrix4x4 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Add<Matrix4x4> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn add(self, rhs: Matrix4x4) -> Matrix4x4 {
-                        self.impl_add(&rhs)
-                    }
-                }
-                impl ::std::ops::Add<&Matrix4x4> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn add(self, rhs: &Matrix4x4) -> Matrix4x4 {
-                        self.impl_add(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Matrix4x4> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn sub(self, rhs: Matrix4x4) -> Matrix4x4 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Matrix4x4> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn sub(self, rhs: &Matrix4x4) -> Matrix4x4 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Sub<Matrix4x4> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn sub(self, rhs: Matrix4x4) -> Matrix4x4 {
-                        self.impl_sub(&rhs)
-                    }
-                }
-                impl ::std::ops::Sub<&Matrix4x4> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn sub(self, rhs: &Matrix4x4) -> Matrix4x4 {
-                        self.impl_sub(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Matrix4x4> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn mul(self, rhs: Matrix4x4) -> Matrix4x4 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Matrix4x4> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn mul(self, rhs: &Matrix4x4) -> Matrix4x4 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<Matrix4x4> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn mul(self, rhs: Matrix4x4) -> Matrix4x4 {
-                        self.impl_mul(&rhs)
-                    }
-                }
-                impl ::std::ops::Mul<&Matrix4x4> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn mul(self, rhs: &Matrix4x4) -> Matrix4x4 {
-                        self.impl_mul(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn mul(self, rhs: f32) -> Matrix4x4 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-                impl ::std::ops::Mul<f32> for &Matrix4x4 {
-                    type Output = Matrix4x4;
-                    fn mul(self, rhs: f32) -> Matrix4x4 {
-                        self.impl_mul_f32(rhs)
-                    }
-                }
-            },
+            ("Windows.Foundation", "TimeSpan") => gen_timespan(),
+            ("Windows.Foundation.Numerics", "Vector2") => gen_vector2(),
+            ("Windows.Foundation.Numerics", "Vector3") => gen_vector3(),
+            ("Windows.Foundation.Numerics", "Vector4") => gen_vector4(),
+            ("Windows.Foundation.Numerics", "Matrix3x2") => gen_matrix3x2(),
+            ("Windows.Foundation.Numerics", "Matrix4x4") => gen_matrix4x4(),
+            ("Windows.Win32.SystemServices", "HANDLE") => gen_handle(),
             _ => TokenStream::new(),
         }
     }

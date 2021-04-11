@@ -5,7 +5,8 @@ pub struct Interface(pub GenericType);
 
 impl Interface {
     pub fn type_signature(&self) -> String {
-        let guid = Guid::from_type_def(&self.0.def).expect("Interface::type_signature");
+        let guid =
+            Guid::from_attributes(self.0.def.attributes()).expect("Interface::type_signature");
 
         if self.0.generics.is_empty() {
             format!("{{{:#?}}}", guid)
@@ -192,14 +193,14 @@ mod tests {
             i[0].def
                 .gen_name(&Gen::absolute(&TypeTree::from_namespace("")))
                 .as_str(),
-            "windows :: foundation :: IAsyncOperation :: < TResult >"
+            "Windows :: Foundation :: IAsyncOperation :: < TResult >"
         );
 
         assert_eq!(
             i[1].def
                 .gen_name(&Gen::absolute(&TypeTree::from_namespace("")))
                 .as_str(),
-            "windows :: foundation :: IAsyncInfo"
+            "Windows :: Foundation :: IAsyncInfo"
         );
     }
 
@@ -213,12 +214,12 @@ mod tests {
             i[0].def
                 .gen_name(&Gen::absolute(&TypeTree::from_namespace("")))
                 .as_str(),
-            "windows :: foundation :: collections :: IMap :: < K , V >"
+            "Windows :: Foundation :: Collections :: IMap :: < K , V >"
         );
 
         assert_eq!(
             i[1].def.gen_name(&Gen::absolute(&TypeTree::from_namespace(""))).as_str(),
-            "windows :: foundation :: collections :: IIterable :: < windows :: foundation :: collections :: IKeyValuePair :: < K , V > >"
+            "Windows :: Foundation :: Collections :: IIterable :: < Windows :: Foundation :: Collections :: IKeyValuePair :: < K , V > >"
         );
     }
 }

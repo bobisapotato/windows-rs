@@ -1,6 +1,6 @@
-use bindings::windows::win32;
-use win32::intl;
-use win32::system_services::{BOOL, PWSTR};
+use bindings::Windows::Win32;
+use Win32::Intl;
+use Win32::SystemServices::{BOOL, PWSTR, S_FALSE};
 
 fn main() -> windows::Result<()> {
     let input = std::env::args()
@@ -10,7 +10,7 @@ fn main() -> windows::Result<()> {
     windows::initialize_mta()?;
 
     // Create ISpellCheckerFactory
-    let factory: intl::ISpellCheckerFactory = windows::create_instance(&intl::SpellCheckerFactory)?;
+    let factory: Intl::ISpellCheckerFactory = windows::create_instance(&Intl::SpellCheckerFactory)?;
 
     // Make sure that the "en-US" locale is supported
     let mut supported: BOOL = false.into();
@@ -38,7 +38,7 @@ fn main() -> windows::Result<()> {
         // Get the next error in the enumerator
         let mut error = None;
         let result = unsafe { errors.Next(&mut error) };
-        if result == windows::ErrorCode::S_FALSE {
+        if result == S_FALSE {
             break;
         }
         result.ok()?;
@@ -56,24 +56,24 @@ fn main() -> windows::Result<()> {
         let substring = &input[start_index as usize..(start_index + length) as usize];
 
         // Get the corrective action
-        let mut action = intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_NONE;
+        let mut action = Intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_NONE;
         unsafe { error.get_CorrectiveAction(&mut action).ok()? };
         println!("{:?}", action);
 
         match action {
-            intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_DELETE => {
+            Intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_DELETE => {
                 println!("Delete '{}'", substring);
             }
-            intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_REPLACE => {
+            Intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_REPLACE => {
                 // Get the replacement as a widestring and convert to a Rust String
-                let mut replacement = PWSTR::default();
+                let mut replacement = PWSTR::NULL;
                 unsafe { error.get_Replacement(&mut replacement).ok()? };
 
                 println!("Replace: {} with {}", substring, unsafe {
                     read_to_string(replacement)
                 });
             }
-            intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_GET_SUGGESTIONS => {
+            Intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_GET_SUGGESTIONS => {
                 // Get an enumerator for all the suggestions for a substring
                 let mut suggestions = None;
                 unsafe { checker.Suggest(substring, &mut suggestions).ok()? };
@@ -82,10 +82,10 @@ fn main() -> windows::Result<()> {
                 // Loop through the suggestions
                 loop {
                     // Get the next suggestion breaking if the call to `Next` failed
-                    let mut suggestion = PWSTR::default();
+                    let mut suggestion = PWSTR::NULL;
                     let result =
                         unsafe { suggestions.Next(1, &mut suggestion, std::ptr::null_mut()) };
-                    if result == windows::ErrorCode::S_FALSE {
+                    if result == S_FALSE {
                         break;
                     }
                     result.ok()?;

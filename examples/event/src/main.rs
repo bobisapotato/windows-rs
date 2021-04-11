@@ -1,13 +1,13 @@
 use bindings::{
-    windows::win32::system_services::{
+    Windows::Win32::SystemServices::{
         CreateEventW, SetEvent, WaitForSingleObject, PWSTR, WAIT_RETURN_CAUSE,
     },
-    windows::win32::windows_programming::CloseHandle,
+    Windows::Win32::WindowsProgramming::CloseHandle,
 };
 
 fn main() -> windows::Result<()> {
     unsafe {
-        let event = CreateEventW(std::ptr::null_mut(), true, false, PWSTR::default());
+        let event = CreateEventW(std::ptr::null_mut(), true, false, PWSTR::NULL);
 
         assert!(event.0 != 0);
 

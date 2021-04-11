@@ -82,11 +82,6 @@ impl TypeReader {
                 for field in def.fields() {
                     let name = field.name();
 
-                    // TODO: https://github.com/microsoft/win32metadata/issues/361
-                    if name == "PEERDIST_RETRIEVAL_OPTIONS_CONTENTINFO_VERSION" {
-                        continue;
-                    }
-
                     types
                         .entry(namespace)
                         .or_default()
@@ -123,8 +118,6 @@ impl TypeReader {
             ("Windows.Win32.Direct2D", "D2D_MATRIX_3X2_F"),
             ("Windows.Win32.SystemServices", "LARGE_INTEGER"),
             ("Windows.Win32.SystemServices", "ULARGE_INTEGER"),
-            // TODO: remove once this is fixed: https://github.com/microsoft/win32metadata/issues/30
-            ("Windows.Win32", "CFunctionDiscoveryNotificationWrapper"),
         ];
 
         for (namespace, name) in exclude {
@@ -136,16 +129,16 @@ impl TypeReader {
         Self { types, nested }
     }
 
-    pub fn find_lowercase_namespace(&'static self, lowercase: &str) -> Option<&'static str> {
+    pub fn resolve_namespace(&'static self, find: &str) -> &'static str {
         self.types
             .keys()
-            .find(|namespace| namespace.to_lowercase() == lowercase)
-            .map(|namespace| *namespace)
+            .find(|namespace| *namespace == &find)
+            .expect(&format!("Could not find namespace `{}`", find))
     }
 
     /// Get all the namespace names that the [`TypeReader`] knows about
     pub fn namespaces(&'static self) -> impl Iterator<Item = &'static str> {
-        self.types.keys().map(|namespace| *namespace)
+        self.types.keys().copied()
     }
 
     /// Get all types for a given namespace
@@ -168,7 +161,7 @@ impl TypeReader {
             .get(enclosing)
             .iter()
             .flat_map(|t| t.values())
-            .map(|def| *def)
+            .copied()
             .collect()
     }
 
@@ -202,12 +195,7 @@ impl TypeReader {
 
     pub fn resolve_type_ref(&'static self, type_ref: &tables::TypeRef) -> tables::TypeDef {
         if let ResolutionScope::TypeRef(scope) = type_ref.scope() {
-            if let Some(scope) = self.nested.get(&scope.resolve()) {
-                scope[type_ref.name()]
-            } else {
-                // TODO: workaround for https://github.com/microsoft/win32metadata/issues/127
-                self.resolve_type_def("Windows.Win32.WindowsAccessibility", "IUIAutomation6")
-            }
+            self.nested[&scope.resolve()][type_ref.name()]
         } else {
             self.resolve_type_def(type_ref.namespace(), type_ref.name())
         }

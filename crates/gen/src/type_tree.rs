@@ -125,14 +125,14 @@ fn gen_namespaces<'a>(
     root: &'a TypeTree,
 ) -> impl Iterator<Item = TokenStream> + 'a {
     namespaces.iter().map(move |(name, tree)| {
-        let name = to_snake(name);
-        let name = to_ident(&name);
+        let name = to_ident(name);
 
         let tokens = tree.gen(root);
 
         quote! {
-            // TODO: remove `unused_variables` when https://github.com/microsoft/windows-rs/issues/212 is fixed
-            #[allow(unused_variables, non_upper_case_globals, non_snake_case)]
+            // TODO: https://github.com/microsoft/windows-rs/issues/212
+            // TODO: https://github.com/microsoft/win32metadata/issues/380
+            #[allow(unused_variables, non_upper_case_globals, non_snake_case, unused_unsafe, non_camel_case_types, dead_code, clippy::all)]
             pub mod #name {
                 #(#tokens)*
             }
@@ -149,12 +149,10 @@ mod tests {
         let reader = TypeReader::get();
         let mut limits = TypeLimits::new(reader);
 
-        limits
-            .insert(NamespaceTypes {
-                namespace: "Windows.Win32.FileSystem",
-                limit: TypeLimit::Some(vec!["FILE_ACCESS_FLAGS".to_string()]),
-            })
-            .unwrap();
+        limits.insert(NamespaceTypes {
+            namespace: "Windows.Win32.FileSystem",
+            limit: TypeLimit::Some(vec!["FILE_ACCESS_FLAGS".to_string()]),
+        });
 
         let tree = TypeTree::from_limits(reader, &limits);
 
@@ -184,7 +182,7 @@ mod tests {
         assert_eq!(
             t.gen_name(&Gen::absolute(&TypeTree::from_namespace("")))
                 .as_str(),
-            "windows :: win32 :: file_system :: FILE_ACCESS_FLAGS"
+            "Windows :: Win32 :: FileSystem :: FILE_ACCESS_FLAGS"
         );
     }
 }

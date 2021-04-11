@@ -1,6 +1,8 @@
 fn main() {
     windows::build!(
-        windows::win32::dxgi::DXGI_ADAPTER_DESC1,
-        windows::win32::windows_and_messaging::NCCALCSIZE_PARAMS,
+        Windows::Win32::Dxgi::DXGI_ADAPTER_DESC1,
+        Windows::Win32::WindowsAndMessaging::NCCALCSIZE_PARAMS,
+        Windows::Win32::IpHelper::IPV6_ADDRESS_EX,
+        Windows::Win32::Debug::MINIDUMP_MEMORY_LIST,
     );
 }

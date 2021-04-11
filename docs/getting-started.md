@@ -37,7 +37,7 @@ windows = { git = "https://github.com/microsoft/windows-rs" }  # TODO: change th
 
 Now that the `bindings` crate depends on the `windows` crate, we can generate our bindings inside of a build script. In case you're not familiar with build scripts, they're simply Rust files that get run automatically by cargo when building a Rust crate. To add one, we simply put a "build.rs" file in the `bindings` crate's directory. We'll add the `windows::build!` macro which is where we declare which Windows APIs we want to generate bindings for.
 
-The question now is: which APIs do we import? Knowing exactly which API you want to use requires familiarity with the Windows API. Let's assume you've explored [the documentation](https://docs.microsoft.com/en-us/windows/apps/) and are sure that you want to use the [internationalization](https://docs.microsoft.com/en-us/windows/win32/api/_intl/) APIs and in particular the `ISpellChecker` (and the related `ISpellCheckerFactory`) located in the [spellcheck](https://docs.microsoft.com/en-us/windows/win32/api/spellcheck/) functionality for this app. To know how this API is translated into Rust, go to the [Rust for Windows](https://microsoft.github.io/windows-docs-rs/doc/bindings/windows/) and search for what you need.
+The question now is: which APIs do we import? Knowing exactly which API you want to use requires familiarity with the Windows API. Let's assume you've explored [the documentation](https://docs.microsoft.com/en-us/windows/apps/) and are sure that you want to use the [internationalization](https://docs.microsoft.com/en-us/windows/win32/api/_intl/) APIs and in particular the `ISpellChecker` (and the related `ISpellCheckerFactory`) located in the [spellcheck](https://docs.microsoft.com/en-us/windows/win32/api/spellcheck/) functionality for this app. To know how this API is translated into Rust, go to the [Rust for Windows](https://microsoft.github.io/windows-docs-rs/doc/bindings/Windows/) and search for what you need.
 
 Doing the search should lead you to find the following:
 
@@ -54,9 +54,9 @@ fn main() {
     windows::build!(
         // Note that we're using the `intl` namespace which is nested inside the `win32` namespace
         // which itself is inside the `windows` namespace.
-        windows::win32::intl::{ISpellChecker, SpellCheckerFactory, ISpellCheckerFactory, CORRECTIVE_ACTION, IEnumSpellingError, ISpellingError},
-        windows::win32::system_services::{BOOL, PWSTR},
-        windows::win32::com::IEnumString
+        Windows::Win32::Intl::{ISpellChecker, SpellCheckerFactory, ISpellCheckerFactory, CORRECTIVE_ACTION, IEnumSpellingError, ISpellingError},
+        Windows::Win32::SystemServices::{BOOL, PWSTR, S_FALSE},
+        Windows::Win32::Com::IEnumString
     )
 }
 ```
@@ -94,8 +94,8 @@ fn main() -> windows::Result<()> {
 Next, we'll initialize the `ISpellCheckerFactory` which is what gives us access to spellcheckers. We'll first make sure the `intl` namespace and two types we'll need `PWSTR` and `BOOL` are in scope at the top of the main.rs file:
 
 ```rust
-use bindings::windows::win32::intl;
-use bindings::windows::win32::system_services::{BOOL, PWSTR};
+use bindings::Windows::Win32::Intl;
+use bindings::Windows::Win32::SystemServices::{BOOL, PWSTR};
 ```
 
 Then we can do the initialization by calling `windows::create_instance` which calls [CoCreateInstance](https://docs.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstance) under the hood:
@@ -106,7 +106,7 @@ fn main() -> window::Result<()> {
     // initialize the main thread as a multithreaded apartment
     windows::initialize_mta()?;
     // Create ISpellCheckerFactory
-    let factory: intl::ISpellCheckerFactory = windows::create_instance(&intl::SpellCheckerFactory)?;
+    let factory: Intl::ISpellCheckerFactory = windows::create_instance(&Intl::SpellCheckerFactory)?;
     // The rest of the code will go here!
     Ok(())
 }
@@ -183,7 +183,7 @@ Lastly, we'll get the "corrective action" (i.e., the thing the spellchecker reco
 // Inside the `loop`
 
 // Get the corrective action
-let mut action = intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_NONE;
+let mut action = Intl::CORRECTIVE_ACTION::CORRECTIVE_ACTION_NONE;
 unsafe { error.get_CorrectiveAction(&mut action).ok()? };
 println!("Corrective Action: {:?}", action);
 ```

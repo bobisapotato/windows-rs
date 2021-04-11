@@ -42,9 +42,10 @@ impl Delegate {
         let constraints = self.0.gen_constraints(gen);
 
         let method = MethodInfo {
-            name: "invoke".to_string(),
+            name: "Invoke".to_string(),
             vtable_offset: 3,
             overload: 0,
+            is_deprecated: false,
         };
 
         let interface = InterfaceInfo {
@@ -120,7 +121,6 @@ impl Delegate {
                 invoke: F,
                 count: ::windows::RefCount,
             }
-            #[allow(non_snake_case)]
             impl<#constraints #fn_constraint> #box_name {
                 const VTABLE: #abi_name = #turbo_abi_name(
                     Self::QueryInterface,
@@ -141,10 +141,10 @@ impl Delegate {
                         };
 
                     if (*interface).is_null() {
-                        ::windows::ErrorCode::E_NOINTERFACE
+                        ::windows::ErrorCode(0x8000_4002) // E_NOINTERFACE
                     } else {
                         (*this).count.add_ref();
-                        ::windows::ErrorCode::S_OK
+                        ::windows::ErrorCode(0)
                     }
                 }
                 unsafe extern "system" fn AddRef(this: ::windows::RawPtr) -> u32 {

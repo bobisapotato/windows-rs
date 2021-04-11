@@ -54,7 +54,6 @@ impl Enum {
         // on the flags attribute.
         let bitwise = if bitwise || self.0.has_attribute("FlagsAttribute") {
             quote! {
-                // TODO: add BitOrAssign and BitAndAssign
                 impl ::std::ops::BitOr for #name {
                     type Output = Self;
 
@@ -67,6 +66,16 @@ impl Enum {
 
                     fn bitand(self, rhs: Self) -> Self {
                         Self(self.0 & rhs.0)
+                    }
+                }
+                impl ::std::ops::BitOrAssign for #name {
+                    fn bitor_assign(&mut self, rhs: Self) {
+                        self.0.bitor_assign(rhs.0)
+                    }
+                }
+                impl ::std::ops::BitAndAssign for #name {
+                    fn bitand_assign(&mut self, rhs: Self) {
+                        self.0.bitand_assign(rhs.0)
                     }
                 }
             }
@@ -96,7 +105,6 @@ impl Enum {
                         pub const #name: Self = Self(#value);
                     })
                 } else {
-                    // TODO: need test for implicit value enums (and create win32metadata bug)
                     last = Some(ConstantValue::I32(0));
 
                     Some(quote! {
@@ -122,12 +130,10 @@ impl Enum {
         };
 
         quote! {
-            #[allow(non_camel_case_types)]
             #[derive(::std::cmp::PartialEq, ::std::cmp::Eq, ::std::marker::Copy, ::std::clone::Clone, ::std::default::Default, ::std::fmt::Debug)]
             #[repr(transparent)]
             pub struct #name(pub #underlying_type);
             impl #name {
-                #![allow(non_upper_case_globals)]
                 #(#fields)*
             }
             impl ::std::convert::From<#underlying_type> for #name {

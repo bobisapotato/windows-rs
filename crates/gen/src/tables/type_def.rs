@@ -101,6 +101,19 @@ impl TypeDef {
         })
     }
 
+    pub fn is_convertible(&self) -> Option<ElementType> {
+        self.attributes().find_map(|attribute| {
+            if attribute.name() == "AlsoUsableForAttribute" {
+                if let Some((_, ConstantValue::String(name))) = attribute.args().get(0) {
+                    // TODO: https://github.com/microsoft/win32metadata/issues/389
+                    return Some(TypeReader::get().resolve_type(self.namespace(), name));
+                }
+            }
+
+            None
+        })
+    }
+
     pub fn kind(&self) -> TypeKind {
         if self.flags().interface() {
             TypeKind::Interface
@@ -132,7 +145,7 @@ impl TypeDef {
     }
 
     pub fn guid(&self) -> Guid {
-        Guid::from_type_def(self).expect("TypeDef::guid")
+        Guid::from_attributes(self.attributes()).expect("TypeDef::guid")
     }
 
     pub fn enclosing_type(&self) -> Option<Self> {
@@ -154,6 +167,14 @@ impl TypeDef {
         }
 
         self.name().to_string()
+    }
+
+    pub fn class_layout(&self) -> Option<ClassLayout> {
+        self.0
+            .file
+            .equal_range(TableIndex::ClassLayout, 2, self.0.row + 1)
+            .map(ClassLayout)
+            .next()
     }
 
     pub fn gen_name(&self, gen: &Gen) -> TokenStream {

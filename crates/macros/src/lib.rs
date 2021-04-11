@@ -3,10 +3,19 @@ mod implement;
 mod implement_tree;
 
 use build_limits::*;
+use gen::*;
 use implement_tree::*;
-use proc_macro::TokenStream;
-use quote::quote;
 use syn::parse_macro_input;
+
+struct RawString(String);
+
+impl ToTokens for RawString {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.push_str("r#\"");
+        tokens.push_str(&self.0);
+        tokens.push_str("\"#");
+    }
+}
 
 /// A macro for generating WinRT modules to a .rs file at build time.
 ///
@@ -23,37 +32,37 @@ use syn::parse_macro_input;
 /// `build` will generate any other WinRT types needed for the specified type to work.
 ///
 /// # Example
-/// The following `build!` generates all types inside of the `microsoft::ai::machine_learning`
+/// The following `build!` generates all types inside of the `Microsoft::AI::MachineLearning`
 /// namespace.
 ///
 /// ```rust,ignore
 /// build!(
-///     microsoft::ai::machine_learning::*
+///     Microsoft::AI::MachineLearning::*
 /// );
 /// ```
 #[proc_macro]
-pub fn build(stream: TokenStream) -> TokenStream {
+pub fn build(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let build = parse_macro_input!(stream as BuildLimits);
 
-    let tokens = match build.to_tokens_string() {
-        Ok(t) => t,
-        Err(t) => return t.into(),
-    };
-
+    let tokens = RawString(build.into_tokens_string());
     let workspace_windows_dir = gen::workspace_windows_dir();
-
-    let mut source = workspace_windows_dir.clone();
-    source.push(ARCHITECTURE);
-    let source = source.to_str().expect("Invalid workspace architecture dir");
 
     let mut destination = workspace_windows_dir.clone();
     destination.pop();
     destination.push("target");
-    let destination = destination.to_str().expect("Invalid workspace target dir");
+    let destination = RawString(
+        destination
+            .to_str()
+            .expect("Invalid workspace target dir")
+            .to_string(),
+    );
 
-    let workspace_windows_dir = workspace_windows_dir
-        .to_str()
-        .expect("Invalid workspace windows dir");
+    let workspace_windows_dir = RawString(
+        workspace_windows_dir
+            .to_str()
+            .expect("Invalid workspace windows dir")
+            .to_string(),
+    );
 
     let tokens = quote! {
         {
@@ -67,16 +76,13 @@ pub fn build(stream: TokenStream) -> TokenStream {
 
             path.push("windows.rs");
             let mut file = ::std::fs::File::create(&path).expect("Failed to create windows.rs");
-            let bytes = #tokens.as_bytes();
-            file.write_all(bytes).expect("Could not write generated code to output file");
+            file.write_all(#tokens.as_bytes()).expect("Could not write generated code to output file");
 
-            if bytes.len() < 100_000_000 {
-                let mut cmd = ::std::process::Command::new("rustfmt");
-                cmd.arg(&path);
-                let _ = cmd.output();
-            }
+            let mut cmd = ::std::process::Command::new("rustfmt");
+            cmd.arg(&path);
+            let _ = cmd.output();
 
-            fn copy(source: &::std::path::PathBuf, destination: &mut ::std::path::PathBuf) {
+            fn copy(source: &::std::path::Path, destination: &mut ::std::path::PathBuf) {
                 if let ::std::result::Result::Ok(files) = ::std::fs::read_dir(source) {
                     for file in files.filter_map(|file| file.ok())  {
                         if let ::std::result::Result::Ok(file_type) = file.file_type() {
@@ -93,7 +99,7 @@ pub fn build(stream: TokenStream) -> TokenStream {
                 }
             }
 
-            fn copy_to_profile(source: &::std::path::PathBuf, destination: &::std::path::PathBuf, profile: &str) {
+            fn copy_to_profile(source: &::std::path::Path, destination: &::std::path::Path, profile: &str) {
                 if let ::std::result::Result::Ok(files) = ::std::fs::read_dir(destination) {
                     for file in files.filter_map(|file| file.ok())  {
                         if let ::std::result::Result::Ok(file_type) = file.file_type() {
@@ -114,7 +120,17 @@ pub fn build(stream: TokenStream) -> TokenStream {
 
             if ::std::path::PathBuf::from(#workspace_windows_dir).exists() {
                 println!("cargo:rerun-if-changed={}", #workspace_windows_dir);
-                let source = ::std::path::PathBuf::from(#source);
+                let mut source = ::std::path::PathBuf::from(#workspace_windows_dir);
+
+                // The `target_arch` cfg is not set for build scripts so we need to sniff it out from the environment variable.
+                source.push(match ::std::env::var("CARGO_CFG_TARGET_ARCH").expect("No `CARGO_CFG_TARGET_ARCH` env variable set").as_str() {
+                    "x86_64" => "x64",
+                    "x86" => "x86",
+                    "arm" => "arm",
+                    "aarch64" => "arm64",
+                    unexpected => panic!("Unexpected `{}` architecture set by `CARGO_CFG_TARGET_ARCH`", unexpected),
+                });
+
                 let destination = ::std::path::PathBuf::from(#destination);
                 let profile = ::std::env::var("PROFILE").expect("No `PROFILE` env variable set");
                 copy_to_profile(&source, &destination, &profile);
@@ -122,7 +138,18 @@ pub fn build(stream: TokenStream) -> TokenStream {
         }
     };
 
-    tokens.into()
+    tokens.as_str().parse().unwrap()
+}
+
+#[proc_macro]
+pub fn generate(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let build = parse_macro_input!(stream as BuildLimits);
+
+    let mut tokens = String::new();
+    tokens.push_str("r#\"");
+    tokens.push_str(&build.into_tokens_string());
+    tokens.push_str("\"#");
+    tokens.parse().unwrap()
 }
 
 /// Rust structs can use the `implement` macro to implement entire WinRT classes or
@@ -132,27 +159,9 @@ pub fn build(stream: TokenStream) -> TokenStream {
 /// interfaces are implemented. Otherwise, whatever interfaces are contained within
 /// the attribute TokenStream are implemented.
 #[proc_macro_attribute]
-pub fn implement(attribute: TokenStream, input: TokenStream) -> TokenStream {
+pub fn implement(
+    attribute: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     implement::gen(attribute, input)
 }
-
-// Snake <-> camel casing is lossy so we go for character but not case conversion
-// and deal with casing once we have an index of namespaces to compare against.
-pub(crate) fn namespace_literal_to_rough_namespace(namespace: &str) -> String {
-    let mut result = String::with_capacity(namespace.len());
-    for c in namespace.chars() {
-        if c != '"' && c != '_' {
-            result.extend(c.to_lowercase());
-        }
-    }
-    result
-}
-
-#[cfg(target_arch = "x86_64")]
-const ARCHITECTURE: &str = "x64";
-#[cfg(target_arch = "x86")]
-const ARCHITECTURE: &str = "x86";
-#[cfg(target_arch = "arm")]
-const ARCHITECTURE: &str = "arm";
-#[cfg(target_arch = "aarch64")]
-const ARCHITECTURE: &str = "arm64";

@@ -1,28 +1,30 @@
 use test_win32::{
-    windows::win32::com::CreateUri,
-    windows::win32::debug::{MiniDumpWriteDump, MINIDUMP_TYPE},
-    windows::win32::direct3d11::D3DDisassemble11Trace,
-    windows::win32::direct3d12::D3D12_DEFAULT_BLEND_FACTOR_ALPHA,
-    windows::win32::direct3d_hlsl::D3DCOMPILER_DLL,
-    windows::win32::display_devices::RECT,
-    windows::win32::dxgi::{
+    Windows::Win32::Automation::BSTR,
+    Windows::Win32::Com::CreateUri,
+    Windows::Win32::Debug::{MiniDumpWriteDump, MINIDUMP_TYPE},
+    Windows::Win32::Direct2D::CLSID_D2D1Shadow,
+    Windows::Win32::Direct3D11::D3DDisassemble11Trace,
+    Windows::Win32::Direct3D12::D3D12_DEFAULT_BLEND_FACTOR_ALPHA,
+    Windows::Win32::Direct3DHlsl::D3DCOMPILER_DLL,
+    Windows::Win32::DisplayDevices::RECT,
+    Windows::Win32::Dxgi::{
         CreateDXGIFactory1, IDXGIFactory7, DXGI_ADAPTER_FLAG, DXGI_ERROR_INVALID_CALL, DXGI_FORMAT,
         DXGI_MODE_DESC, DXGI_MODE_SCALING, DXGI_MODE_SCANLINE_ORDER, DXGI_RATIONAL,
     },
-    windows::win32::game_mode::HasExpandedResources,
-    windows::win32::ldap::ldapsearch,
-    windows::win32::security::ACCESS_MODE,
-    windows::win32::structured_storage::{CreateStreamOnHGlobal, STREAM_SEEK},
-    windows::win32::system_services::{
+    Windows::Win32::GameMode::HasExpandedResources,
+    Windows::Win32::Ldap::ldapsearch,
+    Windows::Win32::Security::ACCESS_MODE,
+    Windows::Win32::StructuredStorage::{CreateStreamOnHGlobal, STREAM_SEEK},
+    Windows::Win32::SystemServices::{
         CreateEventW, SetEvent, WaitForSingleObject, BOOL, HANDLE, PSTR, PWSTR, WAIT_RETURN_CAUSE,
     },
-    windows::win32::ui_animation::{UIAnimationManager, UIAnimationTransitionLibrary},
-    windows::win32::windows_accessibility::UIA_ScrollPatternNoScroll,
-    windows::win32::windows_and_messaging::{
+    Windows::Win32::UIAnimation::{UIAnimationManager, UIAnimationTransitionLibrary},
+    Windows::Win32::WindowsAccessibility::UIA_ScrollPatternNoScroll,
+    Windows::Win32::WindowsAndMessaging::{
         CHOOSECOLORW, HWND, PROPENUMPROCA, PROPENUMPROCW, WM_KEYUP,
     },
-    windows::win32::windows_color_system::WhitePoint,
-    windows::win32::windows_programming::CloseHandle,
+    Windows::Win32::WindowsColorSystem::WhitePoint,
+    Windows::Win32::WindowsProgramming::CloseHandle,
 };
 
 use windows::{Abi, Guid, Interface};
@@ -76,15 +78,15 @@ fn rect() {
 #[test]
 fn dxgi_mode_desc() {
     let _ = DXGI_MODE_DESC {
-        width: 1,
-        height: 2,
-        refresh_rate: DXGI_RATIONAL {
-            numerator: 3,
-            denominator: 5,
+        Width: 1,
+        Height: 2,
+        RefreshRate: DXGI_RATIONAL {
+            Numerator: 3,
+            Denominator: 5,
         },
-        format: DXGI_FORMAT::DXGI_FORMAT_R32_TYPELESS,
-        scanline_ordering: DXGI_MODE_SCANLINE_ORDER::DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE,
-        scaling: DXGI_MODE_SCALING::DXGI_MODE_SCALING_CENTERED,
+        Format: DXGI_FORMAT::DXGI_FORMAT_R32_TYPELESS,
+        ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER::DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE,
+        Scaling: DXGI_MODE_SCALING::DXGI_MODE_SCALING_CENTERED,
     };
 }
 
@@ -95,7 +97,7 @@ fn size64() {
     assert!(std::mem::size_of::<DXGI_ADAPTER_FLAG>() == 4);
     assert!(std::mem::size_of::<RECT>() == 16);
     assert!(std::mem::size_of::<DXGI_MODE_DESC>() == 28);
-    assert!(std::mem::size_of::<CHOOSECOLORW>() == 72);
+    assert_eq!(std::mem::size_of::<CHOOSECOLORW>(), 72);
 }
 
 #[cfg(target_pointer_width = "32")]
@@ -114,6 +116,7 @@ fn constant() {
     assert!(D3D12_DEFAULT_BLEND_FACTOR_ALPHA == 1f32);
     assert!(UIA_ScrollPatternNoScroll == -1f64);
     assert!(D3DCOMPILER_DLL == "d3dcompiler_47.dll");
+    assert!(CLSID_D2D1Shadow == Guid::from("C67EA361-1863-4e69-89DB-695D3E9A5B6B"));
 }
 
 #[test]
@@ -225,9 +228,7 @@ fn com_inheritance() {
             .unwrap();
 
         // IDXGIFactory
-        assert!(
-            factory.GetWindowAssociation(std::ptr::null_mut()).0 == DXGI_ERROR_INVALID_CALL as u32
-        );
+        assert!(factory.GetWindowAssociation(std::ptr::null_mut()) == DXGI_ERROR_INVALID_CALL);
 
         // IDXGIFactory1
         assert!(factory.IsCurrent().as_bool());
@@ -240,10 +241,8 @@ fn com_inheritance() {
 
         // IDXGIFactory7 (default)
         assert!(
-            factory
-                .RegisterAdaptersChangedEvent(HANDLE(0), std::ptr::null_mut())
-                .0
-                == DXGI_ERROR_INVALID_CALL as u32
+            factory.RegisterAdaptersChangedEvent(HANDLE(0), std::ptr::null_mut())
+                == DXGI_ERROR_INVALID_CALL
         );
     }
 }
@@ -289,30 +288,19 @@ fn onecore_imports() -> windows::Result<()> {
     }
 }
 
-// TODO: light up BSTR as windows::BString
+#[test]
+fn interface() -> windows::Result<()> {
+    unsafe {
+        let mut uri = None;
+        let uri =
+            CreateUri("http://kennykerr.ca", Default::default(), 0, &mut uri).and_some(uri)?;
 
-// #[test]
-// fn interface() -> windows::Result<()> {
-//     unsafe {
-//         let s = windows::HString::from("https://kennykerr.ca");
-//         let mut uri = None;
-
-//         // TODO: should unwrap with Result<Uri> like WinRT but need https://github.com/microsoft/win32metadata/issues/24
-//         let hr = CreateUri(s.as_wide().as_ptr() as *mut u16, 1, 0, &mut uri);
-//         windows::ErrorCode(hr as u32).ok()?;
-
-//         assert!(uri.is_some());
-
-//         if let Some(uri) = uri {
-//             let mut domain = windows::BString::new();
-//             let hr = uri.GetDomain(domain.set_abi() as *mut *mut u16);
-//             windows::ErrorCode(hr as u32).ok()?;
-
-//             assert!(domain == "kennykerr.ca");
-//         }
-//     }
-//     Ok(())
-// }
+        let mut domain = BSTR::default();
+        uri.GetDomain(&mut domain).ok()?;
+        assert!(domain == "kennykerr.ca");
+    }
+    Ok(())
+}
 
 #[test]
 fn callback() {

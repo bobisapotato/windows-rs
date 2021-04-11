@@ -186,7 +186,6 @@ impl Class {
                         let interface_type = interface.def.gen_name(gen);
 
                         Some(quote! {
-                            #[allow(non_snake_case, dead_code)]
                             fn #interface_name<R, F: FnOnce(&#interface_type) -> ::windows::Result<R>>(
                                 callback: F,
                             ) -> ::windows::Result<R> {
@@ -217,7 +216,6 @@ impl Class {
                     pub fn new() -> ::windows::Result<Self> {
                         Self::IActivationFactory(|f| f.activate_instance::<Self>())
                     }
-                    #[allow(non_snake_case)]
                     fn IActivationFactory<R, F: FnOnce(&::windows::IActivationFactory) -> ::windows::Result<R>>(
                         callback: F,
                     ) -> ::windows::Result<R> {
@@ -345,19 +343,19 @@ mod tests {
 
         assert_eq!(
             i[0].def.gen_name(&Gen::absolute(&TypeTree::from_namespace(""))).as_str(),
-            "windows :: foundation :: collections :: IMap :: < :: windows :: HString , :: windows :: HString >"
+            "Windows :: Foundation :: Collections :: IMap :: < :: windows :: HString , :: windows :: HString >"
         );
         assert_eq!(i[0].kind, InterfaceKind::Default);
 
         assert_eq!(
             i[1].def.gen_name(&Gen::absolute(&TypeTree::from_namespace(""))).as_str(),
-            "windows :: foundation :: collections :: IIterable :: < windows :: foundation :: collections :: IKeyValuePair :: < :: windows :: HString , :: windows :: HString > >"
+            "Windows :: Foundation :: Collections :: IIterable :: < Windows :: Foundation :: Collections :: IKeyValuePair :: < :: windows :: HString , :: windows :: HString > >"
         );
         assert_eq!(i[1].kind, InterfaceKind::NonDefault);
 
         assert_eq!(
             i[2].def.gen_name(&Gen::absolute(&TypeTree::from_namespace(""))).as_str(),
-            "windows :: foundation :: collections :: IObservableMap :: < :: windows :: HString , :: windows :: HString >"
+            "Windows :: Foundation :: Collections :: IObservableMap :: < :: windows :: HString , :: windows :: HString >"
         );
         assert_eq!(i[2].kind, InterfaceKind::NonDefault);
     }

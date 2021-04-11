@@ -1,11 +1,15 @@
+#![allow(clippy::many_single_char_names)]
+
 use super::*;
 
 #[derive(Clone, PartialEq, Default)]
 pub struct Guid(u32, u16, u16, u8, u8, u8, u8, u8, u8, u8, u8);
 
 impl Guid {
-    pub fn from_type_def(def: &tables::TypeDef) -> Option<Self> {
-        for attribute in def.attributes() {
+    pub fn from_attributes<I: IntoIterator<Item = tables::Attribute>>(
+        attributes: I,
+    ) -> Option<Self> {
+        for attribute in attributes {
             if attribute.name() == "GuidAttribute" {
                 let args = attribute.args();
 

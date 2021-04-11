@@ -1,21 +1,11 @@
 use crate::*;
 
-use bindings::windows::win32::system_services::{
-    GetProcessHeap, HeapAlloc, HeapFree, HeapHandle, HeapReAlloc_dwFlags,
-};
+use bindings::Windows::Win32::SystemServices::{GetProcessHeap, HeapAlloc, HeapFree, HEAP_FLAGS};
 
 pub fn heap_alloc(bytes: usize) -> RawPtr {
-    // https://github.com/microsoft/win32metadata/issues/322
-    // https://github.com/microsoft/win32metadata/issues/331
-    unsafe {
-        HeapAlloc(
-            HeapHandle(GetProcessHeap().0),
-            HeapReAlloc_dwFlags::default(),
-            bytes,
-        )
-    }
+    unsafe { HeapAlloc(GetProcessHeap(), HEAP_FLAGS::HEAP_NONE, bytes) }
 }
 
 pub unsafe fn heap_free(ptr: RawPtr) {
-    HeapFree(GetProcessHeap(), 0, ptr);
+    HeapFree(GetProcessHeap(), HEAP_FLAGS::HEAP_NONE, ptr);
 }

@@ -125,7 +125,7 @@ impl ComInterface {
                     to_ident(name)
                 };
 
-                let vtable_offset = Literal::u32_unsuffixed(vtable_offset as u32 + 3);
+                let vtable_offset = Literal::usize_unsuffixed(vtable_offset + 3);
 
                 quote! {
                     pub unsafe fn #name<#constraints>(&self, #params) #return_type {
@@ -202,7 +202,6 @@ impl ComInterface {
 
         quote! {
             #[repr(transparent)]
-            #[allow(non_camel_case_types)]
             #[derive(::std::cmp::PartialEq, ::std::cmp::Eq, ::std::clone::Clone, ::std::fmt::Debug)]
             pub struct #name(::windows::IUnknown);
             impl #name {
@@ -212,7 +211,6 @@ impl ComInterface {
                 type Vtable = #abi_name;
                 const IID: ::windows::Guid = #guid;
             }
-            #[allow(non_snake_case)]
             impl #name {
                 #(#methods)*
             }

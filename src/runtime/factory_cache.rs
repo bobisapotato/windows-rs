@@ -1,4 +1,5 @@
 use crate::*;
+use bindings::Windows::Win32::SystemServices::CO_E_NOTINITIALIZED;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -74,7 +75,7 @@ pub fn factory<C: RuntimeName, I: Interface>() -> Result<I> {
 
         // If this fails because combase hasn't been loaded yet then load combase
         // automatically so that it "just works" for apartment-agnostic code.
-        if code == ErrorCode::CO_E_NOTINITIALIZED {
+        if code == CO_E_NOTINITIALIZED {
             let mut _cookie = std::ptr::null_mut();
 
             // Won't get any delay-load errors here if we got CO_E_NOTINITIALIZED, so quiet the
@@ -107,7 +108,7 @@ pub fn factory<C: RuntimeName, I: Interface>() -> Result<I> {
             library.push_str(path);
             library.push_str(".dll");
 
-            if let Ok(function) = delay_load(&library, "DllGetActivationFactory", 0) {
+            if let Ok(function) = delay_load(&library, "DllGetActivationFactory") {
                 let function: DllGetActivationFactory = std::mem::transmute(function);
                 let mut abi = std::ptr::null_mut();
                 let _ = function(name.abi(), &mut abi);

@@ -86,8 +86,7 @@ impl GenericType {
 
     pub fn gen_guid(&self, gen: &Gen) -> TokenStream {
         if self.generics.is_empty() {
-            // TODO: workaround for https://github.com/microsoft/win32metadata/issues/312
-            match Guid::from_type_def(&self.def) {
+            match Guid::from_attributes(self.def.attributes()) {
                 Some(guid) => {
                     let guid = guid.gen();
 
@@ -215,7 +214,7 @@ mod tests {
         assert_eq!(
             t.gen_name(&Gen::absolute(&TypeTree::from_namespace("")))
                 .as_str(),
-            "windows :: foundation :: IAsyncOperation :: < TResult >"
+            "Windows :: Foundation :: IAsyncOperation :: < TResult >"
         );
         assert_eq!(
             t.gen_name(&Gen::relative(

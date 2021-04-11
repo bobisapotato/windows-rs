@@ -166,8 +166,15 @@ impl MethodSignature {
             }
         };
 
+        let deprecated = if method.is_deprecated {
+            quote! { #[cfg(feature = "deprecated")] }
+        } else {
+            quote! {}
+        };
+
         match interface.kind {
             InterfaceKind::Default => quote! {
+                #deprecated
                 pub fn #name<#constraints>(&self, #params) -> ::windows::Result<#return_type_tokens> {
                     let this = self;
                     unsafe {
@@ -177,6 +184,7 @@ impl MethodSignature {
             },
             InterfaceKind::NonDefault | InterfaceKind::Overridable => {
                 quote! {
+                    #deprecated
                     pub fn #name<#constraints>(&self, #params) -> ::windows::Result<#return_type_tokens> {
                         let this = &::windows::Interface::cast::<#interface_name>(self).unwrap();
                         unsafe {
@@ -187,6 +195,7 @@ impl MethodSignature {
             }
             InterfaceKind::Static | InterfaceKind::Composable => {
                 quote! {
+                    #deprecated
                     pub fn #name<#constraints>(#params) -> ::windows::Result<#return_type_tokens> {
                         Self::#interface_name(|this| unsafe { #vcall })
                     }
@@ -210,7 +219,7 @@ impl MethodSignature {
 
         for (index, param) in params.iter().enumerate() {
             if param.is_convertible() {
-                let name = squote::format_ident!("T{}__", index);
+                let name = format_ident!("T{}__", index);
                 let into = param.signature.kind.gen_name(gen);
                 tokens.push(quote! { #name: ::windows::IntoParam<'a, #into>, });
             }
@@ -241,7 +250,7 @@ impl MethodSignature {
                     }
                 } else if param.param.is_input() {
                     if param.is_convertible() {
-                        let tokens = squote::format_ident!("T{}__", index);
+                        let tokens = format_ident!("T{}__", index);
                         quote! { #name: #tokens, }
                     } else {
                         let mut signature = quote! {};
@@ -314,7 +323,7 @@ impl MethodSignature {
 
         for (index, param) in params.iter().enumerate() {
             if param.is_convertible() {
-                let name = squote::format_ident!("T{}__", index);
+                let name = format_ident!("T{}__", index);
                 let into = param.signature.kind.gen_name(gen);
                 tokens.push(quote! { #name: ::windows::IntoParam<'a, #into>, });
             }
@@ -335,7 +344,7 @@ impl MethodSignature {
                 let name = param.param.gen_name();
 
                 if param.is_convertible() {
-                    let tokens = squote::format_ident!("T{}__", index);
+                    let tokens = format_ident!("T{}__", index);
                     quote! { #name: #tokens, }
                 } else {
                     let tokens = param.gen_win32(gen);

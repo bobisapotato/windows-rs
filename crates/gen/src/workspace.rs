@@ -21,7 +21,7 @@ pub fn workspace_winmds() -> &'static [File] {
     unsafe { &*VALUE.as_ptr() }
 }
 
-fn workspace_dir() -> std::path::PathBuf {
+pub fn workspace_dir() -> std::path::PathBuf {
     use std::{mem::MaybeUninit, sync::Once};
     static ONCE: Once = Once::new();
     static mut VALUE: MaybeUninit<std::path::PathBuf> = MaybeUninit::uninit();
@@ -31,6 +31,7 @@ fn workspace_dir() -> std::path::PathBuf {
             .arg("metadata")
             .arg("--format-version=1")
             .arg("--no-deps")
+            .arg("--offline")
             .output()
             .expect("Failed to run `cargo metadata`");
 
@@ -46,7 +47,8 @@ fn workspace_dir() -> std::path::PathBuf {
             .find('"')
             .expect("Cargo metadata ended before closing '\"' in `workspace_root` value");
 
-        let workspace_root = &json[beginning_index..beginning_index + ending_index];
+        let workspace_root =
+            json[beginning_index..beginning_index + ending_index].replace("\\\\", "\\");
 
         // This is safe because `Once` provides thread-safe one-time initialization
         unsafe { VALUE = MaybeUninit::new(workspace_root.into()) }

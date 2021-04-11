@@ -14,17 +14,9 @@ impl TypeLimits {
         }
     }
 
-    pub fn insert(&mut self, mut limit: NamespaceTypes) -> Result<(), &'static str> {
-        if let Some(namespace) = self
-            .reader
-            .find_lowercase_namespace(&limit.namespace.to_lowercase())
-        {
-            limit.namespace = namespace;
-            self.inner.insert(limit);
-            Ok(())
-        } else {
-            Err(limit.namespace)
-        }
+    pub fn insert(&mut self, mut limit: NamespaceTypes) {
+        limit.namespace = self.reader.resolve_namespace(&limit.namespace);
+        self.inner.insert(limit);
     }
 
     pub fn limits(&self) -> impl Iterator<Item = &NamespaceTypes> {

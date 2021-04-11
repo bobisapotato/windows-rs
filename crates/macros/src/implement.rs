@@ -1,19 +1,22 @@
 use super::*;
-use squote::{format_ident, quote, Literal, TokenStream};
 
 // TODO: distinguish between COM and WinRT interfaces
 struct Implements(Vec<gen::ElementType>);
 
 impl syn::parse::Parse for Implements {
-    fn parse(inner_type: syn::parse::ParseStream) -> syn::parse::Result<Self> {
+    fn parse(input: syn::parse::ParseStream) -> syn::parse::Result<Self> {
         let mut types = Vec::new();
         let reader = gen::TypeReader::get();
 
         loop {
-            use_tree_to_types(reader, &inner_type.parse::<ImplementTree>()?, &mut types)?;
-
-            if inner_type.parse::<syn::Token!(,)>().is_err() {
+            if input.is_empty() {
                 break;
+            }
+
+            use_tree_to_types(reader, &input.parse::<ImplementTree>()?, &mut types)?;
+
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
             }
         }
 
@@ -50,8 +53,7 @@ fn use_tree_to_types(
                 }
             }
             ImplementTree::Name(name) => {
-                let namespace = crate::namespace_literal_to_rough_namespace(&current.clone());
-                let namespace = reader.find_lowercase_namespace(&namespace).unwrap(); // TODO: handle
+                let namespace = current.trim_matches('"');
 
                 let mut meta_name = name.ident.to_string();
                 let generic_count = name.generics.params.len();
@@ -82,8 +84,10 @@ fn use_tree_to_types(
 
 pub fn gen(
     attribute: proc_macro::TokenStream,
-    inner_type: proc_macro::TokenStream,
+    original_type: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
+    let inner_type = original_type.clone();
+
     let implements = syn::parse_macro_input!(attribute as Implements);
     let inner_type = syn::parse_macro_input!(inner_type as syn::ItemStruct);
     let inner_name = inner_type.ident.to_string();
@@ -99,7 +103,7 @@ pub fn gen(
 
     for (interface_count, implement) in implements.0.iter().enumerate() {
         if let gen::ElementType::Interface(t) = implement {
-            vtable_ordinals.push(Literal::u32_unsuffixed(interface_count as u32));
+            vtable_ordinals.push(Literal::usize_unsuffixed(interface_count));
 
             let query_interface = format_ident!("QueryInterface_abi{}", interface_count);
             let add_ref = format_ident!("AddRef_abi{}", interface_count);
@@ -134,7 +138,7 @@ pub fn gen(
 
             let vtable_ident = t.0.gen_abi_name(&gen);
             let interface_ident = t.0.gen_name(&gen);
-            let interface_literal = Literal::u32_unsuffixed(interface_count as u32);
+            let interface_literal = Literal::usize_unsuffixed(interface_count);
 
             for (vtable_offset, method) in t.0.def.methods().enumerate() {
                 let method_ident = gen::to_ident(&method.rust_name());
@@ -217,10 +221,10 @@ pub fn gen(
                     };
 
                     if (*interface).is_null() {
-                        ::windows::ErrorCode::E_NOINTERFACE
+                        ::windows::ErrorCode(0x8000_4002) // E_NOINTERFACE
                     } else {
                         self.count.add_ref();
-                        ::windows::ErrorCode::S_OK
+                        ::windows::ErrorCode(0)
                     }
                 }
             }
@@ -254,7 +258,7 @@ pub fn gen(
             ) -> ::windows::ErrorCode {
                 let h: ::windows::HString = "Thing".into(); // TODO: replace with class name or first interface
                 *value = ::std::mem::transmute(h);
-                ::windows::ErrorCode::S_OK
+                ::windows::ErrorCode(0)
             }
             unsafe extern "system" fn GetTrustLevel(_: ::windows::RawPtr, value: *mut i32) -> ::windows::ErrorCode {
                 // Note: even if we end up implementing this in future, it still doesn't need a this pointer
@@ -267,13 +271,7 @@ pub fn gen(
         }
     });
 
-    let tokens = tokens.parse::<proc_macro2::TokenStream>().unwrap();
-
-    let tokens = quote::quote! {
-        #inner_type
-        #tokens
-    };
-
-    // println!("{}", tokens.to_string());
-    tokens.into()
+    let mut tokens = tokens.parse::<proc_macro::TokenStream>().unwrap();
+    tokens.extend(std::iter::once(original_type));
+    tokens
 }
