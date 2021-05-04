@@ -1,8 +1,8 @@
 use bindings::{
     Windows::Foundation::Numerics::*, Windows::Win32::Direct2D::*, Windows::Win32::Direct3D11::*,
-    Windows::Win32::Dxgi::*, Windows::Win32::Gdi::*, Windows::Win32::MenusAndResources::*,
-    Windows::Win32::SystemServices::*, Windows::Win32::UIAnimation::*,
-    Windows::Win32::WindowsAndMessaging::*, Windows::Win32::WindowsProgramming::*,
+    Windows::Win32::Dxgi::*, Windows::Win32::Gdi::*, Windows::Win32::SystemServices::*,
+    Windows::Win32::UIAnimation::*, Windows::Win32::WindowsAndMessaging::*,
+    Windows::Win32::WindowsProgramming::*,
 };
 
 use windows::*;
@@ -60,7 +60,7 @@ impl Angles {
 impl Window {
     fn new() -> Result<Self> {
         let factory = create_factory()?;
-        let dxfactory = create_dxfactory()?;
+        let dxfactory: IDXGIFactory2 = unsafe { CreateDXGIFactory1()? };
         let style = create_style(&factory)?;
         let manager: IUIAnimationManager = create_instance(&UIAnimationManager)?;
         let transition = create_transition()?;
@@ -131,11 +131,7 @@ impl Window {
             if error == DXGI_STATUS_OCCLUDED {
                 unsafe {
                     self.dxfactory
-                        .RegisterOcclusionStatusWindow(
-                            self.handle,
-                            WM_USER as u32,
-                            &mut self.occlusion,
-                        )
+                        .RegisterOcclusionStatusWindow(self.handle, WM_USER, &mut self.occlusion)
                         .ok()?;
                 }
                 self.visible = false;
@@ -159,7 +155,7 @@ impl Window {
         self.shadow = None;
     }
 
-    fn present(&self, sync: u32, flags: u32) -> ErrorCode {
+    fn present(&self, sync: u32, flags: u32) -> HRESULT {
         unsafe { self.swapchain.as_ref().unwrap().Present(sync, flags) }
     }
 
@@ -397,11 +393,11 @@ impl Window {
 
     fn run(&mut self) -> Result<()> {
         unsafe {
-            let instance = HINSTANCE(GetModuleHandleA(PSTR::NULL));
+            let instance = HINSTANCE(GetModuleHandleA(None));
             debug_assert!(instance.0 != 0);
 
             let wc = WNDCLASSA {
-                hCursor: LoadCursorW(HINSTANCE(0), IDC_HAND),
+                hCursor: LoadCursorW(None, IDC_HAND),
                 hInstance: instance,
                 lpszClassName: PSTR(b"window\0".as_ptr() as _),
 
@@ -422,8 +418,8 @@ impl Window {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                HWND(0),
-                HMENU(0),
+                None,
+                None,
                 instance,
                 self as *mut _ as _,
             );
@@ -436,26 +432,27 @@ impl Window {
                 if self.visible {
                     self.render()?;
 
-                    // TODO: https://github.com/microsoft/win32metadata/issues/331
                     while PeekMessageA(
                         &mut message,
-                        HWND(0),
+                        None,
                         0,
                         0,
-                        PeekMessage_wRemoveMsg::PM_REMOVE,
+                        PEEK_MESSAGE_REMOVE_TYPE::PM_REMOVE,
                     )
                     .into()
                     {
-                        if message.message == WM_QUIT as u32 {
+                        if message.message == WM_QUIT {
                             return Ok(());
                         }
                         DispatchMessageA(&message);
                     }
                 } else {
-                    GetMessageA(&mut message, HWND(0), 0, 0);
-                    if message.message == WM_QUIT as u32 {
+                    GetMessageA(&mut message, None, 0, 0);
+
+                    if message.message == WM_QUIT {
                         return Ok(());
                     }
+
                     DispatchMessageA(&message);
                 }
             }
@@ -469,7 +466,7 @@ impl Window {
         lparam: LPARAM,
     ) -> LRESULT {
         unsafe {
-            if message == WM_NCCREATE as u32 {
+            if message == WM_NCCREATE {
                 let cs = lparam.0 as *const CREATESTRUCTA;
                 let this = (*cs).lpCreateParams as *mut Self;
                 (*this).handle = window;
@@ -550,13 +547,6 @@ fn create_factory() -> Result<ID2D1Factory1> {
     }
 }
 
-fn create_dxfactory() -> Result<IDXGIFactory2> {
-    unsafe {
-        let mut dxfactory: Option<IDXGIFactory2> = None;
-        CreateDXGIFactory1(&IDXGIFactory2::IID, dxfactory.set_abi()).and_some(dxfactory)
-    }
-}
-
 fn create_style(factory: &ID2D1Factory1) -> Result<ID2D1StrokeStyle> {
     let props = D2D1_STROKE_STYLE_PROPERTIES {
         startCap: D2D1_CAP_STYLE::D2D1_CAP_STYLE_ROUND,
@@ -602,7 +592,7 @@ fn create_device_with_type(drive_type: D3D_DRIVER_TYPE) -> Result<ID3D11Device> 
             flags,
             std::ptr::null(),
             0,
-            D3D11_SDK_VERSION as u32,
+            D3D11_SDK_VERSION,
             &mut device,
             std::ptr::null_mut(),
             &mut None,
@@ -650,23 +640,15 @@ fn get_dxgi_factory(device: &ID3D11Device) -> Result<IDXGIFactory2> {
     let dxdevice = device.cast::<IDXGIDevice>()?;
     let mut adapter = None;
     unsafe {
-        let adapter = dxdevice.GetAdapter(&mut adapter).and_some(adapter)?;
-        let mut parent = None;
-
-        adapter
-            .GetParent(&IDXGIFactory2::IID, parent.set_abi())
-            .and_some(parent)
+        dxdevice
+            .GetAdapter(&mut adapter)
+            .and_some(adapter)?
+            .GetParent()
     }
 }
 
 fn create_swapchain_bitmap(swapchain: &IDXGISwapChain1, target: &ID2D1DeviceContext) -> Result<()> {
-    let mut surface = None;
-
-    let surface: IDXGISurface = unsafe {
-        swapchain
-            .GetBuffer(0, &IDXGISurface::IID, surface.set_abi())
-            .and_some(surface)?
-    };
+    let surface: IDXGISurface = unsafe { swapchain.GetBuffer(0)? };
 
     let props = D2D1_BITMAP_PROPERTIES1 {
         pixelFormat: D2D1_PIXEL_FORMAT {

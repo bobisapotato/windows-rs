@@ -29,10 +29,10 @@ We can generate our bindings inside of the `bindings` crate. To do this, we'll n
 ```toml
 # ^^ The rest of the Cargo.toml remains the same
 [dependencies]
-windows = { git = "https://github.com/microsoft/windows-rs" }  # TODO: change this to the crates.io version when that gets released
+windows = "0.8" # Check https://crates.io/crates/windows for the latest version
 
 [build-dependencies]
-windows = { git = "https://github.com/microsoft/windows-rs" }  # TODO: change this to the crates.io version when that gets released
+windows = "0.8"
 ```
 
 Now that the `bindings` crate depends on the `windows` crate, we can generate our bindings inside of a build script. In case you're not familiar with build scripts, they're simply Rust files that get run automatically by cargo when building a Rust crate. To add one, we simply put a "build.rs" file in the `bindings` crate's directory. We'll add the `windows::build!` macro which is where we declare which Windows APIs we want to generate bindings for.
@@ -41,19 +41,20 @@ The question now is: which APIs do we import? Knowing exactly which API you want
 
 Doing the search should lead you to find the following:
 
-![Search Results](/images/ISpellChecker-docs.png)
+![Search Results](./images/ISpellChecker.png)
 
-Note that the module path that ISpellChecker is in. You'll want to use that exactly when specifying the types you need to generate.
+Remember the module path that `ISpellChecker` is in underneath `bindings`: `Windows::Win32::Intl`. You'll want to use that exactly when specifying the types you need to generate.
 
-It's important to note that for COM and WinRT APIs, methods are only available when all the types use in those methods parameters and return types are also generated. When you want to use a certain type's method, make sure you're generating everything you need to use that method.
+> **Note**
+> It's important to note that for COM and WinRT APIs, methods are only available when all the types use in those methods parameters and return types are also generated. When you want to use a certain type's method, make sure you're generating everything you need to use that method. For example, the `ISpellChecker::Suggest` method takes an argument of type `*mut Option<IEnumString>`. If `IEnumString` (which is located in the `Windows::Win32::Com` namespace), is not generated, `ISpellChecker::Suggest` will not be generated as well.
 
 In the build.rs file add the following:
 
 ```rust
 fn main() {
     windows::build!(
-        // Note that we're using the `intl` namespace which is nested inside the `win32` namespace
-        // which itself is inside the `windows` namespace.
+        // Note that we're using the `Intl` namespace which is nested inside the `Win32` namespace
+        // which itself is inside the `Windows` namespace.
         Windows::Win32::Intl::{ISpellChecker, SpellCheckerFactory, ISpellCheckerFactory, CORRECTIVE_ACTION, IEnumSpellingError, ISpellingError},
         Windows::Win32::SystemServices::{BOOL, PWSTR, S_FALSE},
         Windows::Win32::Com::IEnumString
@@ -61,10 +62,10 @@ fn main() {
 }
 ```
 
-We're not done! This generates the bindings, but it puts them into the target folder of our crate. We want to actually use this generated code not just generate the code and forget about it. In order for the generated code to be exported from the `bindings` crate, we need to include it in the bindings crate. Change the lib.rs file of the bindings crate to the following:
+We're not done! This generates the bindings, but it just puts them into the target folder of our crate where they'll go unused. We want to actually *use* this generated code not just generate and forget about it. In order for the generated code to be exported from the `bindings` crate, we need to include it in the crate itself. Change the lib.rs file of the bindings crate to the following:
 
 ```rust
-::windows::include_bindings!();
+windows::include_bindings!();
 ```
 
 This effectively copy/pastes the generated code into the `lib.rs` file. The `bindings` crate now exports all the bindings we've generated. Next, we need to make sure our `spellchecker` crate depends on the `bindings` crate. In the `spellchecker` crate's Cargo.toml file, add the `bindings` crate as a dependency. We'll also add the `windows` crate as a dependency since we'll be using that as well in our `spellchecker` crate.
@@ -73,10 +74,10 @@ This effectively copy/pastes the generated code into the `lib.rs` file. The `bin
 # ^^ The rest of the Cargo.toml remains the same
 [dependencies]
 bindings = { path = "bindings" }
-windows = { git = "https://github.com/microsoft/windows-rs" }  # TODO: change this to the crates.io version when that gets released
+windows = "0.8" # This should match the version you used in the bindings crate
 ```
 
-And we're done bootstraping the project. Now we'll move on to the code of the `spellchecker` crate which will use both the generated bindings from the `bindings` crate as well as helper functionality from the `windows` crate.
+And we're done bootstrapping the project. Now we'll move on to the code of the `spellchecker` crate which will use both the generated bindings from the `bindings` crate as well as helper functionality from the `windows` crate.
 
 ## Initialization Code
 
@@ -114,7 +115,21 @@ fn main() -> window::Result<()> {
 
 ## Using the generated APIs
 
-Next, we'll use the `ISpellCheckerFactory` to check that we can spell check U.S. English, and then we'll get a spellchecker instance:
+Next, we'll use the `ISpellCheckerFactory` to check that we can spell check U.S. English, and then we'll get a spellchecker instance.
+
+Let's take a look at the method signature of `ISpellCheckerFactor::IsSupported`:
+
+```rust
+pub unsafe fn IsSupported<'a>(
+    &self,
+    languageTag: impl IntoParam<'a, PWSTR>,
+    value: *mut BOOL,
+) -> HRESULT
+```
+
+This looks a little complicated, but it makes using the API straightforward. The method is generic on both a lifetime `'a` and the trait `IntoParam` defined in the `windows` crate. Essentially, `IntoParam` is a slightly specialized version of Rust's `std::convert::Into`. It is implemented on all types that can be converted to a parameter of the type its generic over. In other words, it is any type that can be converted into a parameter of type `PWSTR` that lives for at least the lifetime `'a`. 
+
+It turns out that `IntoParam<'a, PWSTR>` is implemented for `&'a str` so we can simply pass a string literal. `IntoParam<'a, PWSTR>` is also implemented on `String` and `PWSTR` itself.
 
 ```rust
 fn main() -> window::Result<()> {
@@ -166,7 +181,7 @@ fn main() -> window::Result<()> {
         let mut error = None;
         let result = unsafe { errors.Next(&mut error) };
         // Getting S_FALSE means there are no more errors
-        if result == windows::ErrorCode::S_FALSE {
+        if result == windows::HRESULT::S_FALSE {
             break;
         }
         // We still need to check that `Next` didn't return an unexpected error
@@ -200,7 +215,7 @@ We should get the following output:
 Corrective Action: CORRECTIVE_ACTION(1)
 ```
 
-Looking at the [docs for `CORRECTIVE_ACTION](https://docs.microsoft.com/en-us/windows/win32/api/spellcheck/ne-spellcheck-corrective_action), we can see that 1-index action corresponds to `CORRECTIVE_ACTION_GET_SUGGESTIONS`, meaning the spellchecking API has suggestions.
+Looking at the [docs for `CORRECTIVE_ACTION`](https://docs.microsoft.com/en-us/windows/win32/api/spellcheck/ne-spellcheck-corrective_action), we can see that 1-index action corresponds to `CORRECTIVE_ACTION_GET_SUGGESTIONS`, meaning the spellchecking API has suggestions.
 
 ## Next Steps
 

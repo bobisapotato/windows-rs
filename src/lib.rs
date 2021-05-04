@@ -17,14 +17,20 @@ mod result;
 mod runtime;
 mod traits;
 
+use interfaces::*;
 use runtime::*;
 
+#[doc(hidden)]
 pub use bindings::Windows::Win32::Com::IAgileObject;
-pub use interfaces::{IActivationFactory, IUnknown, Object};
-pub use result::{Error, ErrorCode, Result};
+
+#[doc(hidden)]
+pub use interfaces::IActivationFactory;
+
+pub use interfaces::{IInspectable, IUnknown};
+pub use result::{Error, Result, HRESULT};
 pub use runtime::{
-    create_instance, factory, initialize_mta, initialize_sta, Array, FactoryCache, Guid, HString,
-    Param, RefCount, Waiter,
+    create_instance, factory, initialize_mta, initialize_sta, Array, FactoryCache, Guid, Param,
+    RefCount, Waiter, Weak, WeakRefCount, HSTRING,
 };
 pub use traits::{Abi, Interface, IntoParam, RuntimeName, RuntimeType};
 

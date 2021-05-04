@@ -151,7 +151,7 @@ impl Interface {
             #[repr(transparent)]
             #[derive(::std::cmp::PartialEq, ::std::cmp::Eq, ::std::clone::Clone, ::std::fmt::Debug)]
             #hidden
-            pub struct #name(::windows::Object, #(#struct_phantoms,)*) where #constraints;
+            pub struct #name(::windows::IInspectable, #(#struct_phantoms,)*) where #constraints;
             unsafe impl<#constraints> ::windows::Interface for #name {
                 type Vtable = #abi_name;
                 const IID: ::windows::Guid = #guid;
@@ -160,12 +160,12 @@ impl Interface {
             #[repr(C)]
             #[doc(hidden)]
             pub struct #abi_name(
-                pub unsafe extern "system" fn(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::ErrorCode,
+                pub unsafe extern "system" fn(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::HRESULT,
                 pub unsafe extern "system" fn(this: ::windows::RawPtr) -> u32,
                 pub unsafe extern "system" fn(this: ::windows::RawPtr) -> u32,
-                pub unsafe extern "system" fn(this: ::windows::RawPtr, count: *mut u32, values: *mut *mut ::windows::Guid) -> ::windows::ErrorCode,
-                pub unsafe extern "system" fn(this: ::windows::RawPtr, value: *mut ::windows::RawPtr) -> ::windows::ErrorCode,
-                pub unsafe extern "system" fn(this: ::windows::RawPtr, value: *mut i32) -> ::windows::ErrorCode,
+                pub unsafe extern "system" fn(this: ::windows::RawPtr, count: *mut u32, values: *mut *mut ::windows::Guid) -> ::windows::HRESULT,
+                pub unsafe extern "system" fn(this: ::windows::RawPtr, value: *mut ::windows::RawPtr) -> ::windows::HRESULT,
+                pub unsafe extern "system" fn(this: ::windows::RawPtr, value: *mut i32) -> ::windows::HRESULT,
                 #(pub unsafe extern "system" fn #abi_signatures,)*
                 #(pub #abi_phantoms,)*
             ) where #constraints;

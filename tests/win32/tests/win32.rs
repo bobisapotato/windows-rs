@@ -27,7 +27,7 @@ use test_win32::{
     Windows::Win32::WindowsProgramming::CloseHandle,
 };
 
-use windows::{Abi, Guid, Interface};
+use windows::{Abi, Guid};
 
 #[test]
 fn signed_enum32() {
@@ -149,7 +149,7 @@ fn bool_as_error() {
         assert!(result.is_err());
 
         let error: windows::Error = result.unwrap_err();
-        assert_eq!(error.code(), windows::ErrorCode(0x8007_0006));
+        assert_eq!(error.code(), windows::HRESULT(0x8007_0006));
         assert_eq!(error.message(), "The handle is invalid.");
     }
 }
@@ -222,10 +222,7 @@ fn com() -> windows::Result<()> {
 #[test]
 fn com_inheritance() {
     unsafe {
-        let mut factory: Option<IDXGIFactory7> = None;
-        let factory: IDXGIFactory7 = CreateDXGIFactory1(&IDXGIFactory7::IID, factory.set_abi())
-            .and_some(factory)
-            .unwrap();
+        let factory: IDXGIFactory7 = CreateDXGIFactory1().unwrap();
 
         // IDXGIFactory
         assert!(factory.GetWindowAssociation(std::ptr::null_mut()) == DXGI_ERROR_INVALID_CALL);
@@ -257,7 +254,7 @@ fn onecore_imports() -> windows::Result<()> {
         let mut uri = None;
         let uri = CreateUri(
             PWSTR(
-                windows::HString::from("http://kennykerr.ca")
+                windows::HSTRING::from("http://kennykerr.ca")
                     .as_wide()
                     .as_ptr() as _,
             ),
@@ -272,9 +269,9 @@ fn onecore_imports() -> windows::Result<()> {
         assert!(port == 80);
 
         let result = MiniDumpWriteDump(
-            HANDLE(0),
+            None,
             0,
-            HANDLE(0),
+            None,
             MINIDUMP_TYPE::MiniDumpNormal,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -304,18 +301,20 @@ fn interface() -> windows::Result<()> {
 
 #[test]
 fn callback() {
-    let a: PROPENUMPROCA = callback_a;
-    assert!(BOOL(789) == a(HWND(123), PSTR("hello a\0".as_ptr() as _), HANDLE(456)));
+    unsafe {
+        let a: PROPENUMPROCA = callback_a;
+        assert!(BOOL(789) == a(HWND(123), PSTR("hello a\0".as_ptr() as _), HANDLE(456)));
 
-    let a: PROPENUMPROCW = callback_w;
-    assert!(
-        BOOL(789)
-            == a(
-                HWND(123),
-                PWSTR(windows::HString::from("hello w\0").as_wide().as_ptr() as _),
-                HANDLE(456)
-            )
-    );
+        let a: PROPENUMPROCW = callback_w;
+        assert!(
+            BOOL(789)
+                == a(
+                    HWND(123),
+                    PWSTR(windows::HSTRING::from("hello w\0").as_wide().as_ptr() as _),
+                    HANDLE(456)
+                )
+        );
+    }
 }
 
 // TODO: second parameter should be *const i8

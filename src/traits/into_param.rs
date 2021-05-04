@@ -16,7 +16,7 @@ impl<'a, T: Abi> IntoParam<'a, T> for &'a T {
     }
 }
 
-impl<'a, T: Interface> IntoParam<'a, T> for Option<T> {
+impl<'a, T: Abi> IntoParam<'a, T> for Option<T> {
     fn into_param(self) -> Param<'a, T> {
         match self {
             Some(value) => Param::Owned(value),
@@ -25,7 +25,7 @@ impl<'a, T: Interface> IntoParam<'a, T> for Option<T> {
     }
 }
 
-impl<'a, T: Interface> IntoParam<'a, T> for &'a Option<T> {
+impl<'a, T: Abi> IntoParam<'a, T> for &'a Option<T> {
     fn into_param(self) -> Param<'a, T> {
         match self {
             Some(value) => Param::Borrowed(value),
@@ -34,14 +34,14 @@ impl<'a, T: Interface> IntoParam<'a, T> for &'a Option<T> {
     }
 }
 
-impl<'a> IntoParam<'a, HString> for &'a str {
-    fn into_param(self) -> Param<'a, HString> {
+impl<'a> IntoParam<'a, HSTRING> for &'a str {
+    fn into_param(self) -> Param<'a, HSTRING> {
         Param::Owned(self.into())
     }
 }
 
-impl<'a> IntoParam<'a, HString> for String {
-    fn into_param(self) -> Param<'a, HString> {
+impl<'a> IntoParam<'a, HSTRING> for String {
+    fn into_param(self) -> Param<'a, HSTRING> {
         Param::Owned(self.into())
     }
 }

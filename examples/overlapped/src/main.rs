@@ -15,11 +15,11 @@ fn main() -> windows::Result<()> {
             std::ptr::null_mut(),
             FILE_CREATION_DISPOSITION::OPEN_EXISTING,
             FILE_FLAGS_AND_ATTRIBUTES::FILE_FLAG_OVERLAPPED,
-            HANDLE::NULL,
+            None,
         );
 
         if file.is_invalid() {
-            windows::ErrorCode::from_thread().ok()?;
+            windows::HRESULT::from_thread().ok()?;
         }
 
         let mut overlapped = OVERLAPPED {
@@ -29,14 +29,14 @@ fn main() -> windows::Result<()> {
                     OffsetHigh: 0,
                 },
             },
-            hEvent: CreateEventA(std::ptr::null_mut(), true, false, PSTR::NULL),
+            hEvent: CreateEventA(std::ptr::null_mut(), true, false, None),
             Internal: 0,
             InternalHigh: 0,
         };
 
         assert!(overlapped.hEvent.0 != 0);
-
         let mut buffer: [u8; 12] = Default::default();
+
         let read_ok = ReadFile(
             file,
             buffer.as_mut_ptr() as _,
@@ -46,7 +46,7 @@ fn main() -> windows::Result<()> {
         );
 
         if !read_ok.as_bool() {
-            assert_eq!(GetLastError(), ERROR_IO_PENDING as u32);
+            assert_eq!(GetLastError(), WIN32_ERROR::ERROR_IO_PENDING);
         }
 
         let wait_ok = WaitForSingleObject(overlapped.hEvent, 2000);

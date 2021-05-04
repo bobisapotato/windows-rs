@@ -89,7 +89,7 @@ impl Delegate {
                 pub fn new<#fn_constraint>(invoke: F) -> Self {
                     let com = #box_name {
                         vtable: &#box_name::VTABLE,
-                        count: ::windows::RefCount::new(),
+                        count: ::windows::RefCount::new(1),
                         invoke,
                     };
                     unsafe {
@@ -109,7 +109,7 @@ impl Delegate {
             #[repr(C)]
             #[doc(hidden)]
             pub struct #abi_name(
-                pub unsafe extern "system" fn(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::ErrorCode,
+                pub unsafe extern "system" fn(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::HRESULT,
                 pub unsafe extern "system" fn(this: ::windows::RawPtr) -> u32,
                 pub unsafe extern "system" fn(this: ::windows::RawPtr) -> u32,
                 pub unsafe extern "system" fn #abi_signature,
@@ -129,7 +129,7 @@ impl Delegate {
                     Self::Invoke,
                     #(#vtable_phantoms,)*
                 );
-                unsafe extern "system" fn QueryInterface(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::ErrorCode {
+                unsafe extern "system" fn QueryInterface(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::HRESULT {
                     let this = this as *mut ::windows::RawPtr as *mut Self;
 
                     *interface = if iid == &<#name as ::windows::Interface>::IID ||
@@ -140,11 +140,13 @@ impl Delegate {
                             ::std::ptr::null_mut()
                         };
 
+                    // TODO: implement IMarshal
+
                     if (*interface).is_null() {
-                        ::windows::ErrorCode(0x8000_4002) // E_NOINTERFACE
+                        ::windows::HRESULT(0x8000_4002) // E_NOINTERFACE
                     } else {
                         (*this).count.add_ref();
-                        ::windows::ErrorCode(0)
+                        ::windows::HRESULT(0)
                     }
                 }
                 unsafe extern "system" fn AddRef(this: ::windows::RawPtr) -> u32 {

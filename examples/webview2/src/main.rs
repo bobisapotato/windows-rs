@@ -14,10 +14,9 @@ use bindings::{
             Gdi,
             HiDpi::{self, PROCESS_DPI_AWARENESS},
             KeyboardAndMouseInput,
-            MenusAndResources::HMENU,
             SystemServices::{self, HINSTANCE, LRESULT, PSTR},
             WindowsAndMessaging::{
-                self, SetWindowPos_uFlags, HWND, LPARAM, MSG, SHOW_WINDOW_CMD, WINDOW_EX_STYLE,
+                self, HWND, LPARAM, MSG, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
                 WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WNDCLASSA, WPARAM,
             },
         },
@@ -80,8 +79,8 @@ impl From<windows::Error> for Error {
     }
 }
 
-impl From<ErrorCode> for Error {
-    fn from(err: ErrorCode) -> Self {
+impl From<HRESULT> for Error {
+    fn from(err: HRESULT) -> Self {
         Self::WindowsError(windows::Error::fast_error(err))
     }
 }
@@ -141,17 +140,17 @@ impl FrameWindow {
                 WindowsAndMessaging::RegisterClassA(&window_class);
 
                 WindowsAndMessaging::CreateWindowExA(
-                    WINDOW_EX_STYLE(0),
+                    Default::default(),
                     class_name,
                     class_name,
                     WINDOW_STYLE::WS_OVERLAPPEDWINDOW,
                     WindowsAndMessaging::CW_USEDEFAULT,
                     WindowsAndMessaging::CW_USEDEFAULT,
-                    640,
-                    480,
-                    HWND(0),
-                    HMENU(0),
-                    HINSTANCE(SystemServices::GetModuleHandleA(PSTR(0 as *mut _))),
+                    WindowsAndMessaging::CW_USEDEFAULT,
+                    WindowsAndMessaging::CW_USEDEFAULT,
+                    None,
+                    None,
+                    HINSTANCE(SystemServices::GetModuleHandleA(None)),
                     0 as *mut _,
                 )
             }
@@ -176,7 +175,7 @@ pub struct WebView {
     bindings: Arc<Mutex<HashMap<String, Box<dyn FnMut(Vec<Value>) -> Result<Value>>>>>,
     frame: Option<FrameWindow>,
     parent: Arc<HWND>,
-    url: Arc<Mutex<HString>>,
+    url: Arc<Mutex<HSTRING>>,
 }
 
 impl Drop for WebViewController {
@@ -268,7 +267,7 @@ impl WebView {
             bindings: Arc::new(Mutex::new(HashMap::new())),
             frame,
             parent: Arc::new(parent),
-            url: Arc::new(Mutex::new(HString::new())),
+            url: Arc::new(Mutex::new(HSTRING::new())),
         };
 
         // Inject the invoke handler.
@@ -353,7 +352,7 @@ impl WebView {
                 let result = WindowsAndMessaging::GetMessageA(&mut msg, h_wnd, 0, 0).0;
 
                 match result {
-                    -1 => break Err(ErrorCode::from_thread().into()),
+                    -1 => break Err(HRESULT::from_thread().into()),
                     0 => break Ok(()),
                     _ => match msg.message {
                         WindowsAndMessaging::WM_APP => (),
@@ -404,14 +403,14 @@ impl WebView {
             unsafe {
                 WindowsAndMessaging::SetWindowPos(
                     *frame.window,
-                    HWND(0),
+                    None,
                     0,
                     0,
                     width,
                     height,
-                    SetWindowPos_uFlags::SWP_NOACTIVATE
-                        | SetWindowPos_uFlags::SWP_NOZORDER
-                        | SetWindowPos_uFlags::SWP_NOMOVE,
+                    SET_WINDOW_POS_FLAGS::SWP_NOACTIVATE
+                        | SET_WINDOW_POS_FLAGS::SWP_NOZORDER
+                        | SET_WINDOW_POS_FLAGS::SWP_NOMOVE,
                 );
             }
         }
@@ -637,7 +636,7 @@ fn wait_with_pump<T>(rx: mpsc::Receiver<T>) -> Result<T> {
         unsafe {
             match WindowsAndMessaging::GetMessageA(&mut msg, hwnd, 0, 0).0 {
                 -1 => {
-                    return Err(ErrorCode::from_thread().into());
+                    return Err(HRESULT::from_thread().into());
                 }
                 0 => return Err(Error::TaskCanceled),
                 _ => {

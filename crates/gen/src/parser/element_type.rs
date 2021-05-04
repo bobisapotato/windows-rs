@@ -18,10 +18,10 @@ pub enum ElementType {
     ISize,
     USize,
     String,
-    Object,
     Guid,
     IUnknown,
-    ErrorCode,
+    IInspectable,
+    HRESULT,
     Matrix3x2,
     TypeName,
     GenericParam(tables::GenericParam),
@@ -36,6 +36,12 @@ pub enum ElementType {
     Struct(types::Struct),
     Delegate(types::Delegate),
     Callback(types::Callback),
+}
+
+impl Default for ElementType {
+    fn default() -> Self {
+        Self::Void
+    }
 }
 
 impl ElementType {
@@ -102,7 +108,7 @@ impl ElementType {
             0x18 => Some(Self::ISize),
             0x19 => Some(Self::USize),
             0x0e => Some(Self::String),
-            0x1c => Some(Self::Object),
+            0x1c => Some(Self::IInspectable),
             _ => None,
         }
     }
@@ -122,8 +128,10 @@ impl ElementType {
                     TypeDefOrRef::TypeRef(type_ref) => match type_ref.full_name() {
                         ("System", "Guid") | ("Windows.Win32.Com", "Guid") => Self::Guid,
                         ("Windows.Win32.Com", "IUnknown") => Self::IUnknown,
-                        ("Windows.Foundation", "HResult") => Self::ErrorCode,
-                        ("Windows.Win32.Com", "HRESULT") => Self::ErrorCode,
+                        ("Windows.Foundation", "HResult") => Self::HRESULT,
+                        ("Windows.Win32.Com", "HRESULT") => Self::HRESULT,
+                        ("Windows.Win32.WinRT", "HSTRING") => Self::String,
+                        ("Windows.Win32.WinRT", "IInspectable") => Self::IInspectable,
                         ("Windows.Win32.SystemServices", "LARGE_INTEGER") => Self::I64,
                         ("Windows.Win32.SystemServices", "ULARGE_INTEGER") => Self::U64,
                         ("Windows.Win32.Direct2D", "D2D_MATRIX_3X2_F") => Self::Matrix3x2,
@@ -196,10 +204,10 @@ impl ElementType {
             Self::ISize => quote! { isize },
             Self::USize => quote! { usize },
             Self::String => {
-                quote! { ::windows::HString }
+                quote! { ::windows::HSTRING }
             }
-            Self::Object => {
-                quote! { ::windows::Object }
+            Self::IInspectable => {
+                quote! { ::windows::IInspectable }
             }
             Self::Guid => {
                 quote! { ::windows::Guid }
@@ -207,8 +215,8 @@ impl ElementType {
             Self::IUnknown => {
                 quote! { ::windows::IUnknown }
             }
-            Self::ErrorCode => {
-                quote! { ::windows::ErrorCode }
+            Self::HRESULT => {
+                quote! { ::windows::HRESULT }
             }
             Self::Matrix3x2 => {
                 let numerics = gen.namespace("Windows.Foundation.Numerics");
@@ -220,7 +228,7 @@ impl ElementType {
                 quote! { [#name; #len] }
             }
             Self::GenericParam(generic) => generic.gen_name(),
-            Self::Function(t) => t.gen_name(),
+            Self::Function(t) => t.gen_name(gen),
             Self::Constant(t) => t.gen_name(),
             Self::Class(t) => t.0.gen_name(gen),
             Self::Interface(t) => t.0.gen_name(gen),
@@ -253,7 +261,7 @@ impl ElementType {
             Self::String => {
                 quote! { ::windows::RawPtr }
             }
-            Self::Object => {
+            Self::IInspectable => {
                 quote! { ::windows::RawPtr }
             }
             Self::Guid => {
@@ -262,8 +270,8 @@ impl ElementType {
             Self::IUnknown => {
                 quote! { ::windows::RawPtr }
             }
-            Self::ErrorCode => {
-                quote! { ::windows::ErrorCode }
+            Self::HRESULT => {
+                quote! { ::windows::HRESULT }
             }
             Self::Matrix3x2 => {
                 let numerics = gen.namespace("Windows.Foundation.Numerics");
@@ -338,7 +346,7 @@ impl ElementType {
             Self::F32 => "f4".to_owned(),
             Self::F64 => "f8".to_owned(),
             Self::String => "string".to_owned(),
-            Self::Object => "cinterface(IInspectable)".to_owned(),
+            Self::IInspectable => "cinterface(IInspectable)".to_owned(),
             Self::Guid => "g16".to_owned(),
             Self::Class(t) => t.type_signature(),
             Self::Interface(t) => t.type_signature(),
@@ -385,7 +393,7 @@ impl ElementType {
     pub fn is_nullable(&self) -> bool {
         matches!(
             self,
-            Self::Object
+            Self::IInspectable
                 | Self::IUnknown
                 | Self::Function(_)
                 | Self::Interface(_)
@@ -399,7 +407,7 @@ impl ElementType {
     pub fn is_blittable(&self) -> bool {
         match self {
             Self::String
-            | Self::Object
+            | Self::IInspectable
             | Self::IUnknown
             | Self::GenericParam(_)
             | Self::Class(_)
@@ -416,7 +424,7 @@ impl ElementType {
         matches!(
             self,
             Self::String
-                | Self::Object
+                | Self::IInspectable
                 | Self::Guid
                 | Self::IUnknown
                 | Self::Matrix3x2
@@ -450,7 +458,7 @@ impl ElementType {
                 | Self::F64
                 | Self::ISize
                 | Self::USize
-                | Self::ErrorCode
+                | Self::HRESULT
                 | Self::Enum(_)
         )
     }
@@ -489,8 +497,8 @@ impl ElementType {
             Self::Delegate(t) => t.gen(gen),
             Self::Callback(t) => t.gen(gen),
             Self::GenericParam(p) => p.gen_name(),
-            Self::Object => {
-                quote! { ::windows::Object }
+            Self::IInspectable => {
+                quote! { ::windows::IInspectable }
             }
             _ => unexpected!(),
         }

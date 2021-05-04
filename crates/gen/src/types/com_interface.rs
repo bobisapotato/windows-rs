@@ -98,7 +98,7 @@ impl ComInterface {
                     return quote! {};
                 }
 
-                let constraints = signature.gen_win32_constraints(&signature.params, gen);
+                let constraints = signature.gen_constraints(&signature.params);
                 let params = signature.gen_win32_params(&signature.params, gen);
 
                 let (udt_return_type, udt_return_local, return_type, udt_return_expression) = if let Some(t) = &signature.return_type {
@@ -127,11 +127,25 @@ impl ComInterface {
 
                 let vtable_offset = Literal::usize_unsuffixed(vtable_offset + 3);
 
-                quote! {
-                    pub unsafe fn #name<#constraints>(&self, #params) #return_type {
-                        #udt_return_local
-                        (::windows::Interface::vtable(self).#vtable_offset)(::windows::Abi::abi(self), #(#args,)* #udt_return_type)
-                        #udt_return_expression
+                if signature.has_query_interface() {
+                    let leading_params = &signature.params[..signature.params.len() - 2];
+                    let params = signature.gen_win32_params(leading_params, gen);
+                    let args = leading_params.iter().map(|p| p.gen_win32_abi_arg());
+
+                    quote! {
+                        pub unsafe fn #name<#constraints T: ::windows::Interface>(&self, #params) -> ::windows::Result<T> {
+                            let mut result__ = ::std::option::Option::None;
+                            (::windows::Interface::vtable(self).#vtable_offset)(::windows::Abi::abi(self), #(#args,)* &<T as ::windows::Interface>::IID, ::windows::Abi::set_abi(&mut result__)).and_some(result__)
+                        }
+                    }
+                }
+                else {
+                    quote! {
+                        pub unsafe fn #name<#constraints>(&self, #params) #return_type {
+                            #udt_return_local
+                            (::windows::Interface::vtable(self).#vtable_offset)(::windows::Abi::abi(self), #(#args,)* #udt_return_type)
+                            #udt_return_expression
+                        }
                     }
                 }
             });
@@ -205,21 +219,18 @@ impl ComInterface {
             #[derive(::std::cmp::PartialEq, ::std::cmp::Eq, ::std::clone::Clone, ::std::fmt::Debug)]
             pub struct #name(::windows::IUnknown);
             impl #name {
-
+                #(#methods)*
             }
             unsafe impl ::windows::Interface for #name {
                 type Vtable = #abi_name;
                 const IID: ::windows::Guid = #guid;
-            }
-            impl #name {
-                #(#methods)*
             }
             #conversions
             #send_sync
             #[repr(C)]
             #[doc(hidden)]
             pub struct #abi_name(
-                pub unsafe extern "system" fn(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::ErrorCode,
+                pub unsafe extern "system" fn(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::HRESULT,
                 pub unsafe extern "system" fn(this: ::windows::RawPtr) -> u32,
                 pub unsafe extern "system" fn(this: ::windows::RawPtr) -> u32,
                 #(pub unsafe extern "system" fn #abi_signatures,)*

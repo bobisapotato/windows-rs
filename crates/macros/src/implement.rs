@@ -119,7 +119,7 @@ pub fn gen(
             };
 
             shims.combine(&quote! {
-                unsafe extern "system" fn #query_interface(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::ErrorCode {
+                unsafe extern "system" fn #query_interface(this: ::windows::RawPtr, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::HRESULT {
                     let this = (this as *mut ::windows::RawPtr).sub(#interface_count) as *mut Self;
                     (*this).QueryInterface(iid, interface)
                 }
@@ -195,7 +195,7 @@ pub fn gen(
         struct #box_ident {
             vtable: (#(*const #vtable_idents,)*),
             inner: #inner_ident,
-            count: ::windows::RefCount,
+            count: ::windows::WeakRefCount,
         }
         impl #box_ident {
             const VTABLE: (#(#vtable_idents,)*) = (
@@ -205,26 +205,32 @@ pub fn gen(
                 Self {
                     vtable: (#(&Self::VTABLE.#vtable_ordinals,)*),
                     inner,
-                    count: ::windows::RefCount::new()
+                    count: ::windows::WeakRefCount::new()
                 }
             }
-            fn QueryInterface(&mut self, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::ErrorCode {
+            fn QueryInterface(&mut self, iid: &::windows::Guid, interface: *mut ::windows::RawPtr) -> ::windows::HRESULT {
                 unsafe {
                     *interface = match iid {
                         #queries
                         &<::windows::IUnknown as ::windows::Interface>::IID
-                        | &<::windows::Object as ::windows::Interface>::IID
+                        | &<::windows::IInspectable as ::windows::Interface>::IID
                         | &<::windows::IAgileObject as ::windows::Interface>::IID => {
                             &mut self.vtable.0 as *mut _ as _
                         }
                         _ => ::std::ptr::null_mut(),
                     };
 
-                    if (*interface).is_null() {
-                        ::windows::ErrorCode(0x8000_4002) // E_NOINTERFACE
-                    } else {
+                    if !(*interface).is_null() {
                         self.count.add_ref();
-                        ::windows::ErrorCode(0)
+                        return ::windows::HRESULT(0);
+                    }
+
+                    *interface = self.count.query(iid, &mut self.vtable.0 as *mut _ as _);
+
+                    if (*interface).is_null() {
+                        ::windows::HRESULT(0x8000_4002) // E_NOINTERFACE
+                    } else {
+                        ::windows::HRESULT(0)
                     }
                 }
             }
@@ -244,28 +250,28 @@ pub fn gen(
                 _: ::windows::RawPtr,
                 count: *mut u32,
                 values: *mut *mut ::windows::Guid,
-            ) -> ::windows::ErrorCode {
+            ) -> ::windows::HRESULT {
                 // Note: even if we end up implementing this in future, it still doesn't need a this pointer
                 // since the data to be returned is type- not instance-specific so can be shared for all
                 // interfaces.
                 *count = 0;
                 *values = ::std::ptr::null_mut();
-                ::windows::ErrorCode(0)
+                ::windows::HRESULT(0)
             }
             unsafe extern "system" fn GetRuntimeClassName(
                 _: ::windows::RawPtr,
                 value: *mut ::windows::RawPtr,
-            ) -> ::windows::ErrorCode {
-                let h: ::windows::HString = "Thing".into(); // TODO: replace with class name or first interface
+            ) -> ::windows::HRESULT {
+                let h: ::windows::HSTRING = "Thing".into(); // TODO: replace with class name or first interface
                 *value = ::std::mem::transmute(h);
-                ::windows::ErrorCode(0)
+                ::windows::HRESULT(0)
             }
-            unsafe extern "system" fn GetTrustLevel(_: ::windows::RawPtr, value: *mut i32) -> ::windows::ErrorCode {
+            unsafe extern "system" fn GetTrustLevel(_: ::windows::RawPtr, value: *mut i32) -> ::windows::HRESULT {
                 // Note: even if we end up implementing this in future, it still doesn't need a this pointer
                 // since the data to be returned is type- not instance-specific so can be shared for all
                 // interfaces.
                 *value = 0;
-                ::windows::ErrorCode(0)
+                ::windows::HRESULT(0)
             }
             #shims
         }

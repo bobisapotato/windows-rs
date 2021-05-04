@@ -2,8 +2,8 @@ use super::*;
 
 pub fn gen_bstr() -> TokenStream {
     quote! {
-        #[repr(C)]
-        #[derive(::std::clone::Clone, ::std::cmp::Eq)]
+        #[repr(transparent)]
+        #[derive(::std::cmp::Eq)]
         pub struct BSTR(*mut u16);
         impl BSTR {
             pub fn is_empty(&self) -> bool {
@@ -24,14 +24,19 @@ pub fn gen_bstr() -> TokenStream {
                 unsafe { ::std::slice::from_raw_parts(self.0 as *const u16, SysStringLen(self) as usize) }
             }
         }
-        impl  std::convert::From<&str> for BSTR {
+        impl ::std::clone::Clone for BSTR {
+            fn clone(&self) -> Self {
+                Self::from_wide(self.as_wide())
+            }
+        }
+        impl ::std::convert::From<&str> for BSTR {
             fn from(value: &str) -> Self {
                 let value: ::std::vec::Vec<u16> = value.encode_utf16().collect();
                 Self::from_wide(&value)
             }
         }
 
-        impl  std::convert::From<::std::string::String> for BSTR {
+        impl ::std::convert::From<::std::string::String> for BSTR {
             fn from(value: ::std::string::String) -> Self {
                 value.as_str().into()
             }
